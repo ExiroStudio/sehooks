@@ -42,6 +42,9 @@ ENV SEH_HOST=0.0.0.0 \
 
 WORKDIR /app
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 COPY --from=builder /app/sehooks /app/sehooks
 
 EXPOSE 8080
@@ -51,4 +54,5 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f -s http://127.0.0.1:${SEH_PORT}/ > /dev/null || exit 1
 
-ENTRYPOINT ["/app/sehooks"]
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["/app/sehooks"]

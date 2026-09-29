@@ -1,6 +1,6 @@
 services:
   sehooks:
-    image: ghcr.io/exirostudio/sehooks:latest
+    image: ghcr.io/exirostudio/script-execution-hooks:latest
     container_name: sehooks
     restart: unless-stopped
     ports:
@@ -10,10 +10,15 @@ services:
       - SEH_SECRET_KEY=change-me-in-production
       - SEH_PORT=8080
       - SEH_DB_PATH=/data/hooks.db
+      # Option A: Automatic GHCR login via token
+      # - GHCR_TOKEN=ghp_your_github_personal_access_token
+      # - GHCR_USERNAME=your_github_username
     volumes:
       - sehooks_data:/data
-      # Optional: Mount host docker socket if scripts run docker commands on host
-      # - /var/run/docker.sock:/var/run/docker.sock
+      # Mount host docker socket if scripts run docker commands on host
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Option B: Inherit docker login credentials from host (~/.docker)
+      - ${HOME}/.docker:/root/.docker:ro
       # Optional: Mount host workspace for deployment scripts
       # - /var/www:/var/www
 

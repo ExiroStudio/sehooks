@@ -105,6 +105,34 @@ docker compose -f /var/www/my-app/docker-compose.yml pull
 docker compose -f /var/www/my-app/docker-compose.yml up -d
 ```
 
+### 🔑 Private Registry Authentication (e.g. ghcr.io)
+When running `docker pull ghcr.io/...` inside `sehooks`, the Docker client inside the container needs credentials. Choose either of these two methods:
+
+#### Method 1: Inherit Host Credentials (Recommended)
+If you already executed `docker login ghcr.io` on your host machine, mount your host's Docker configuration directory:
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  - ${HOME}/.docker:/root/.docker:ro
+```
+> [!NOTE]
+> Ensure `docker login ghcr.io` was executed by the same host user running `docker compose`. If using `sudo docker compose`, mount `/home/youruser/.docker:/root/.docker:ro` explicitly.
+
+#### Method 2: Automatic Login via Environment Variables
+Pass your credentials as container environment variables. The built-in entrypoint will automatically authenticate on container startup:
+```yaml
+environment:
+  - GHCR_TOKEN=ghp_your_github_personal_access_token
+  - GHCR_USERNAME=your_github_username   # optional
+```
+For Docker Hub or custom private registries:
+```yaml
+environment:
+  - DOCKER_REGISTRY=registry.example.com # optional, defaults to Docker Hub
+  - DOCKER_USERNAME=myuser
+  - DOCKER_PASSWORD=mypassword
+```
+
 ---
 
 ## 📡 Triggering Webhooks

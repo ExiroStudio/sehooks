@@ -121,7 +121,11 @@ func ParseEnvVars(jsonStr string) (map[string]string, error) {
 // buildEnv creates a minimal, safe environment for script execution
 func buildEnv(extraVars map[string]string) []string {
 	// Allowlisted base env vars
-	allowed := []string{"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TERM"}
+	allowed := []string{
+		"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TERM",
+		"DOCKER_CONFIG", "DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
+		"GITHUB_TOKEN", "GH_TOKEN", "GIT_SSH_COMMAND",
+	}
 	env := make([]string, 0, len(allowed)+len(extraVars))
 
 	for _, key := range allowed {
