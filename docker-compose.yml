@@ -1,0 +1,21 @@
+services:
+  sehooks:
+    image: ghcr.io/exirostudio/sehooks:latest
+    container_name: sehooks
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SEH_ADMIN_PASSWORD=admin # Change this to a strong password
+      - SEH_SECRET_KEY=change-me-in-production
+      - SEH_PORT=8080
+      - SEH_DB_PATH=/data/hooks.db
+    volumes:
+      - sehooks_data:/data
+      # Optional: Mount host docker socket if scripts run docker commands on host
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # Optional: Mount host workspace for deployment scripts
+      # - /var/www:/var/www
+
+volumes:
+  sehooks_data:

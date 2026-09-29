@@ -1,0 +1,12 @@
+.git
+.github
+dist
+hooks.db
+hooks.db-*
+*.log
+*.tmp
+*.sh
+.env
+Dockerfile*
+docker-compose*.yml
+README*.md

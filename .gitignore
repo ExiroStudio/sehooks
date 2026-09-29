@@ -1,0 +1,26 @@
+# Binaries and build artifacts
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+sehooks
+
+# Database files
+hooks.db
+hooks.db-shm
+hooks.db-wal
+
+# Local environment & scratch files
+.env
+.env.*
+*.log
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*~
