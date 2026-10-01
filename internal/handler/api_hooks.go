@@ -12,6 +12,7 @@ import (
 
 	"github.com/script-execution-hooks/internal/config"
 	"github.com/script-execution-hooks/internal/db"
+	"github.com/script-execution-hooks/internal/executor"
 )
 
 // LoginHandler handles POST /api/auth/login
@@ -91,6 +92,11 @@ func HookHandler(database *db.DB, cfg *config.Config) http.HandlerFunc {
 			regenToken(w, r, database, id)
 			return
 		}
+		// Handle sub-paths: /api/hooks/:id/trigger
+		if strings.HasSuffix(r.URL.Path, "/trigger") {
+			triggerHook(w, r, database, id)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			getHook(w, database, id)
@@ -101,6 +107,71 @@ func HookHandler(database *db.DB, cfg *config.Config) http.HandlerFunc {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	})
+}
+
+func triggerHook(w http.ResponseWriter, r *http.Request, database *db.DB, id int64) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	hook, err := database.GetHookByID(id)
+	if err != nil || hook == nil {
+		writeError(w, http.StatusNotFound, "hook not found")
+		return
+	}
+	if hook.ScriptID == nil {
+		writeError(w, http.StatusBadRequest, "hook has no script linked")
+		return
+	}
+	script, err := database.GetScriptByID(*hook.ScriptID)
+	if err != nil || script == nil {
+		writeError(w, http.StatusNotFound, "linked script not found")
+		return
+	}
+
+	var req struct {
+		Payload string `json:"payload"`
+	}
+	_ = decodeJSON(r, &req)
+
+	clientIP := r.Header.Get("X-Forwarded-For")
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+
+	logEntry := &db.ExecutionLog{
+		HookID:    &hook.ID,
+		ScriptID:  hook.ScriptID,
+		TriggerIP: clientIP + " (UI)",
+		Status:    "running",
+		Payload:   req.Payload,
+	}
+	logID, err := database.CreateLog(logEntry)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	envVars, err := executor.ParseEnvVars(script.EnvVars)
+	if err != nil {
+		envVars = map[string]string{}
+	}
+	envVars["SEH_HOOK_ID"] = fmt.Sprintf("%d", hook.ID)
+	envVars["SEH_HOOK_NAME"] = hook.Name
+	envVars["SEH_HOOK_SLUG"] = hook.Slug
+	envVars["SEH_TRIGGER_IP"] = clientIP
+
+	go func() {
+		result := executor.RunWithPayload(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds, req.Payload)
+		exitCode := &result.ExitCode
+		_ = database.UpdateLog(logID, exitCode, result.Stdout, result.Stderr, result.DurationMs, result.Status)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok":      true,
+		"message": "hook triggered successfully",
+		"log_id":  logID,
 	})
 }
 

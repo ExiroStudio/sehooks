@@ -189,10 +189,36 @@
             <h1>Execution Logs</h1>
             <p>History of all hook trigger events</p>
           </div>
-          <button class="btn btn-ghost" id="refresh-logs-btn">
-            <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
-            Refresh
-          </button>
+          <div class="page-actions" style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-ghost btn-sm" id="auto-refresh-btn" title="Toggle automatic refresh every 3 seconds">
+              <span id="auto-refresh-indicator" class="pulse-dot"></span>
+              <span id="auto-refresh-text">Auto-Refresh: OFF</span>
+            </button>
+            <button class="btn btn-danger btn-sm" id="clear-logs-btn" title="Clear all execution logs">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+              Clear Logs
+            </button>
+            <button class="btn btn-ghost btn-sm" id="refresh-logs-btn">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="logs-toolbar">
+          <div class="search-box">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+            <input type="text" id="logs-search" placeholder="Search hook, script, output, IP..." />
+          </div>
+          <div class="filter-group">
+            <select id="logs-filter-status">
+              <option value="">All Statuses</option>
+              <option value="running">Running</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+              <option value="timeout">Timeout</option>
+              <option value="interrupted">Interrupted</option>
+            </select>
+          </div>
         </div>
         <div id="logs-list" class="logs-table-wrapper">
           <div class="loading-state">Loading logs...</div>

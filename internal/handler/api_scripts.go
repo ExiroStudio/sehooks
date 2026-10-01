@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/script-execution-hooks/internal/config"
 	"github.com/script-execution-hooks/internal/db"
+	"github.com/script-execution-hooks/internal/executor"
 )
 
 // ScriptsHandler handles /api/scripts
@@ -30,6 +32,10 @@ func ScriptHandler(database *db.DB, cfg *config.Config) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/run") {
+			runScriptDirectly(w, r, database, id)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			getScript(w, database, id)
@@ -40,6 +46,61 @@ func ScriptHandler(database *db.DB, cfg *config.Config) http.HandlerFunc {
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	})
+}
+
+func runScriptDirectly(w http.ResponseWriter, r *http.Request, database *db.DB, id int64) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	script, err := database.GetScriptByID(id)
+	if err != nil || script == nil {
+		writeError(w, http.StatusNotFound, "script not found")
+		return
+	}
+
+	var req struct {
+		Payload string `json:"payload"`
+	}
+	_ = decodeJSON(r, &req)
+
+	clientIP := r.Header.Get("X-Forwarded-For")
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+
+	logEntry := &db.ExecutionLog{
+		HookID:    nil,
+		ScriptID:  &script.ID,
+		TriggerIP: clientIP + " (Direct)",
+		Status:    "running",
+		Payload:   req.Payload,
+	}
+	logID, err := database.CreateLog(logEntry)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	envVars, err := executor.ParseEnvVars(script.EnvVars)
+	if err != nil {
+		envVars = map[string]string{}
+	}
+	envVars["SEH_SCRIPT_ID"] = fmt.Sprintf("%d", script.ID)
+	envVars["SEH_SCRIPT_NAME"] = script.Name
+	envVars["SEH_TRIGGER_IP"] = clientIP
+
+	go func() {
+		result := executor.RunWithPayload(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds, req.Payload)
+		exitCode := &result.ExitCode
+		_ = database.UpdateLog(logID, exitCode, result.Stdout, result.Stderr, result.DurationMs, result.Status)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok":      true,
+		"message": "script execution started",
+		"log_id":  logID,
 	})
 }
 

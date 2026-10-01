@@ -143,6 +143,32 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .badge-accent { background: var(--accent-dim); color: var(--accent); }
 .badge-warning { background: var(--warning-dim); color: var(--warning); }
 .badge-muted { background: var(--bg-elevated); color: var(--text-secondary); }
+.badge-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.badge-id:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
 .token-box {
   background: var(--bg-elevated); border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm); padding: 8px 10px;
@@ -150,7 +176,65 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
   display: flex; align-items: center; justify-content: space-between;
   gap: 8px; margin-bottom: 14px; word-break: break-all;
 }
-.card-actions { display: flex; gap: 8px; }
+.token-actions { display: flex; align-items: center; gap: 4px; }
+.card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Logs Toolbar ── */
+.logs-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+}
+.search-box svg { color: var(--text-muted); flex-shrink: 0; }
+.search-box input {
+  background: transparent;
+  border: none;
+  padding: 7px 0;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  width: 100%;
+}
+.filter-group select {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  display: inline-block;
+  transition: background 0.2s;
+}
+.pulse-dot.active {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+  animation: pulse 1.2s infinite;
+}
 
 /* ── Logs Table ── */
 .logs-table-wrapper { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
@@ -168,13 +252,44 @@ body { font-family: var(--font); background: var(--bg-base); color: var(--text-p
 .log-success::before { background: var(--success); }
 .log-failed::before { background: var(--danger); }
 .log-timeout::before { background: var(--warning); }
+.log-interrupted::before { background: var(--text-muted); }
 .log-running::before { background: var(--accent); animation: pulse 1s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .log-code { font-family: var(--mono); font-size: 11.5px; color: var(--text-secondary); }
+.log-actions-cell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .log-expand-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); padding: 4px; border-radius: 4px; }
 .log-expand-btn:hover { color: var(--accent); background: var(--accent-dim); }
-.log-output-row td { padding: 0 16px 12px; }
-.log-output { background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 12px; font-family: var(--mono); font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+.log-output-row td { padding: 0 16px 14px; }
+.log-output-box {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+.log-output-box:last-child { margin-bottom: 0; }
+.log-output-box.box-error { border-color: rgba(239,68,68,0.3); }
+.log-output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.log-output-content {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  max-height: 250px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+.box-error .log-output-content { color: #fca5a5; }
 
 /* ── Buttons ── */
 .btn {

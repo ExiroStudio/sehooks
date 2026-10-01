@@ -25,6 +25,7 @@ func New(path string) (*DB, error) {
 	if err := d.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	_ = d.RecoverStaleLogs()
 	return d, nil
 }
 
@@ -61,7 +62,7 @@ func (d *DB) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS execution_logs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		hook_id INTEGER NOT NULL REFERENCES hooks(id) ON DELETE CASCADE,
+		hook_id INTEGER REFERENCES hooks(id) ON DELETE CASCADE,
 		script_id INTEGER REFERENCES scripts(id) ON DELETE SET NULL,
 		trigger_ip TEXT DEFAULT '',
 		exit_code INTEGER,
@@ -69,6 +70,7 @@ func (d *DB) migrate() error {
 		stderr TEXT DEFAULT '',
 		duration_ms INTEGER DEFAULT 0,
 		status TEXT DEFAULT 'running',
+		payload TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -84,6 +86,38 @@ func (d *DB) migrate() error {
 	if _, err := d.conn.Exec(schema); err != nil {
 		return err
 	}
+
+	// Migrate execution_logs if hook_id is NOT NULL or if payload column is missing
+	var notNull int
+	row := d.conn.QueryRow(`SELECT "notnull" FROM pragma_table_info('execution_logs') WHERE name = 'hook_id'`)
+	if err := row.Scan(&notNull); err == nil && notNull == 1 {
+		_, _ = d.conn.Exec(`
+			PRAGMA foreign_keys=off;
+			CREATE TABLE IF NOT EXISTS execution_logs_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				hook_id INTEGER REFERENCES hooks(id) ON DELETE CASCADE,
+				script_id INTEGER REFERENCES scripts(id) ON DELETE SET NULL,
+				trigger_ip TEXT DEFAULT '',
+				exit_code INTEGER,
+				stdout TEXT DEFAULT '',
+				stderr TEXT DEFAULT '',
+				duration_ms INTEGER DEFAULT 0,
+				status TEXT DEFAULT 'running',
+				payload TEXT DEFAULT '',
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			);
+			INSERT INTO execution_logs_new(id, hook_id, script_id, trigger_ip, exit_code, stdout, stderr, duration_ms, status, created_at)
+			SELECT id, hook_id, script_id, trigger_ip, exit_code, stdout, stderr, duration_ms, status, created_at FROM execution_logs;
+			DROP TABLE execution_logs;
+			ALTER TABLE execution_logs_new RENAME TO execution_logs;
+			CREATE INDEX IF NOT EXISTS idx_execution_logs_hook_id ON execution_logs(hook_id);
+			CREATE INDEX IF NOT EXISTS idx_execution_logs_created_at ON execution_logs(created_at DESC);
+			PRAGMA foreign_keys=on;
+		`)
+	} else {
+		_, _ = d.conn.Exec(`ALTER TABLE execution_logs ADD COLUMN payload TEXT DEFAULT ''`)
+	}
+
 	// Seed default config
 	defaults := map[string]string{
 		"max_concurrent_executions": "5",
@@ -247,9 +281,9 @@ func (d *DB) DeleteScript(id int64) error {
 
 func (d *DB) CreateLog(l *ExecutionLog) (int64, error) {
 	res, err := d.conn.Exec(`
-		INSERT INTO execution_logs(hook_id, script_id, trigger_ip, status)
-		VALUES(?,?,?,?)`,
-		l.HookID, l.ScriptID, l.TriggerIP, l.Status)
+		INSERT INTO execution_logs(hook_id, script_id, trigger_ip, status, payload)
+		VALUES(?,?,?,?,?)`,
+		l.HookID, l.ScriptID, l.TriggerIP, l.Status, l.Payload)
 	if err != nil {
 		return 0, err
 	}
@@ -264,15 +298,33 @@ func (d *DB) UpdateLog(id int64, exitCode *int, stdout, stderr string, durationM
 	return err
 }
 
-func (d *DB) ListLogs(limit, offset int) ([]ExecutionLog, error) {
-	rows, err := d.conn.Query(`
-		SELECT l.id, l.hook_id, l.script_id, l.trigger_ip, l.exit_code, l.stdout, l.stderr, l.duration_ms, l.status, l.created_at,
-		       COALESCE(h.name,'') as hook_name, COALESCE(s.name,'') as script_name
+func (d *DB) ListLogsFiltered(hookID int64, status, search string, limit, offset int) ([]ExecutionLog, error) {
+	query := `
+		SELECT l.id, l.hook_id, l.script_id, l.trigger_ip, l.exit_code, l.stdout, l.stderr, l.duration_ms, l.status, COALESCE(l.payload,''), l.created_at,
+		       COALESCE(h.name,'Manual / Test') as hook_name, COALESCE(s.name,'') as script_name
 		FROM execution_logs l
 		LEFT JOIN hooks h ON h.id = l.hook_id
 		LEFT JOIN scripts s ON s.id = l.script_id
-		ORDER BY l.created_at DESC
-		LIMIT ? OFFSET ?`, limit, offset)
+		WHERE 1=1
+	`
+	var args []any
+	if hookID > 0 {
+		query += " AND l.hook_id = ?"
+		args = append(args, hookID)
+	}
+	if status != "" && status != "all" {
+		query += " AND l.status = ?"
+		args = append(args, status)
+	}
+	if search != "" {
+		query += " AND (COALESCE(h.name,'') LIKE ? OR COALESCE(s.name,'') LIKE ? OR l.trigger_ip LIKE ? OR l.stdout LIKE ? OR l.stderr LIKE ?)"
+		term := "%" + search + "%"
+		args = append(args, term, term, term, term, term)
+	}
+	query += " ORDER BY l.created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := d.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -280,21 +332,12 @@ func (d *DB) ListLogs(limit, offset int) ([]ExecutionLog, error) {
 	return scanLogs(rows)
 }
 
+func (d *DB) ListLogs(limit, offset int) ([]ExecutionLog, error) {
+	return d.ListLogsFiltered(0, "", "", limit, offset)
+}
+
 func (d *DB) ListLogsByHook(hookID int64, limit, offset int) ([]ExecutionLog, error) {
-	rows, err := d.conn.Query(`
-		SELECT l.id, l.hook_id, l.script_id, l.trigger_ip, l.exit_code, l.stdout, l.stderr, l.duration_ms, l.status, l.created_at,
-		       COALESCE(h.name,'') as hook_name, COALESCE(s.name,'') as script_name
-		FROM execution_logs l
-		LEFT JOIN hooks h ON h.id = l.hook_id
-		LEFT JOIN scripts s ON s.id = l.script_id
-		WHERE l.hook_id = ?
-		ORDER BY l.created_at DESC
-		LIMIT ? OFFSET ?`, hookID, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanLogs(rows)
+	return d.ListLogsFiltered(hookID, "", "", limit, offset)
 }
 
 func scanLogs(rows *sql.Rows) ([]ExecutionLog, error) {
@@ -302,7 +345,7 @@ func scanLogs(rows *sql.Rows) ([]ExecutionLog, error) {
 	for rows.Next() {
 		var l ExecutionLog
 		if err := rows.Scan(&l.ID, &l.HookID, &l.ScriptID, &l.TriggerIP, &l.ExitCode,
-			&l.Stdout, &l.Stderr, &l.DurationMs, &l.Status, &l.CreatedAt,
+			&l.Stdout, &l.Stderr, &l.DurationMs, &l.Status, &l.Payload, &l.CreatedAt,
 			&l.HookName, &l.ScriptName); err != nil {
 			return nil, err
 		}
@@ -313,6 +356,21 @@ func scanLogs(rows *sql.Rows) ([]ExecutionLog, error) {
 
 func (d *DB) DeleteLog(id int64) error {
 	_, err := d.conn.Exec(`DELETE FROM execution_logs WHERE id=?`, id)
+	return err
+}
+
+func (d *DB) ClearAllLogs() error {
+	_, err := d.conn.Exec(`DELETE FROM execution_logs`)
+	return err
+}
+
+func (d *DB) RecoverStaleLogs() error {
+	_, err := d.conn.Exec(`
+		UPDATE execution_logs 
+		SET status = 'interrupted', 
+		    stderr = CASE WHEN stderr = '' THEN '[ABORTED: server restarted or process interrupted]' ELSE stderr || char(10) || '[ABORTED: server restarted or process interrupted]' END
+		WHERE status = 'running'
+	`)
 	return err
 }
 

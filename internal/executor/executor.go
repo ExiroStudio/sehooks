@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -23,6 +24,11 @@ type Result struct {
 
 // Run executes a shell script safely with the given options
 func Run(script, workingDir string, envVars map[string]string, timeoutSeconds int) Result {
+	return RunWithPayload(script, workingDir, envVars, timeoutSeconds, "")
+}
+
+// RunWithPayload executes a shell script safely with input payload
+func RunWithPayload(script, workingDir string, envVars map[string]string, timeoutSeconds int, payload string) Result {
 	start := time.Now()
 
 	if timeoutSeconds <= 0 {
@@ -65,6 +71,30 @@ func Run(script, workingDir string, envVars map[string]string, timeoutSeconds in
 	cmd := exec.CommandContext(ctx, "bash", tmpFile.Name())
 	cmd.Dir = workingDir
 
+	// Process group isolation: ensure child processes and pipelines belong to this group
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Kill entire process group on cancellation / timeout
+	cmd.Cancel = func() error {
+		if cmd.Process != nil && cmd.Process.Pid > 0 {
+			// Negative PID sends signal to the entire process group
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+
+	// Prevent cmd.Wait from hanging forever if child processes keep stdout/stderr open
+	cmd.WaitDelay = 2 * time.Second
+
+	// Supply payload to stdin if provided
+	if payload != "" {
+		cmd.Stdin = strings.NewReader(payload)
+		if envVars == nil {
+			envVars = make(map[string]string)
+		}
+		envVars["SEH_PAYLOAD"] = payload
+	}
+
 	// Build restricted environment
 	env := buildEnv(envVars)
 	cmd.Env = env
@@ -86,7 +116,10 @@ func Run(script, workingDir string, envVars map[string]string, timeoutSeconds in
 		result.Status = "timeout"
 		result.ExitCode = -1
 		result.Error = fmt.Errorf("script timed out after %ds", timeoutSeconds)
-		result.Stderr += "\n[TIMEOUT: script exceeded time limit]"
+		if result.Stderr != "" {
+			result.Stderr += "\n"
+		}
+		result.Stderr += fmt.Sprintf("[TIMEOUT: script exceeded time limit of %ds]", timeoutSeconds)
 		return result
 	}
 

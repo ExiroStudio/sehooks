@@ -33,14 +33,15 @@ type Script struct {
 // ExecutionLog represents a single hook execution record
 type ExecutionLog struct {
 	ID         int64     `json:"id"`
-	HookID     int64     `json:"hook_id"`
+	HookID     *int64    `json:"hook_id"`
 	ScriptID   *int64    `json:"script_id"`
 	TriggerIP  string    `json:"trigger_ip"`
 	ExitCode   *int      `json:"exit_code"`
 	Stdout     string    `json:"stdout"`
 	Stderr     string    `json:"stderr"`
 	DurationMs int64     `json:"duration_ms"`
-	Status     string    `json:"status"` // running, success, failed, timeout
+	Status     string    `json:"status"` // running, success, failed, timeout, interrupted
+	Payload    string    `json:"payload"`
 	CreatedAt  time.Time `json:"created_at"`
 	// Joined
 	HookName   string `json:"hook_name,omitempty"`

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -43,12 +44,20 @@ func WebhookHandler(database *db.DB) http.HandlerFunc {
 			clientIP = r.RemoteAddr
 		}
 
+		// Read request payload (up to 64KB)
+		var payload string
+		if r.Body != nil {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 65536))
+			payload = string(bodyBytes)
+		}
+
 		// Create log entry
 		logEntry := &db.ExecutionLog{
-			HookID:    hook.ID,
+			HookID:    &hook.ID,
 			ScriptID:  hook.ScriptID,
 			TriggerIP: clientIP,
 			Status:    "running",
+			Payload:   payload,
 		}
 		logID, err := database.CreateLog(logEntry)
 		if err != nil {
@@ -94,7 +103,7 @@ func WebhookHandler(database *db.DB) http.HandlerFunc {
 
 		// Execute script asynchronously
 		go func() {
-			result := executor.Run(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds)
+			result := executor.RunWithPayload(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds, payload)
 			exitCode := &result.ExitCode
 			if err := database.UpdateLog(logID, exitCode, result.Stdout, result.Stderr, result.DurationMs, result.Status); err != nil {
 				log.Printf("update log error: %v", err)

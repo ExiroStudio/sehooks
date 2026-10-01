@@ -12,6 +12,14 @@ import (
 // LogsHandler handles /api/logs
 func LogsHandler(database *db.DB, cfg *config.Config) http.HandlerFunc {
 	return authMiddleware(cfg, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			if err := database.ClearAllLogs(); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeOK(w, "all logs cleared")
+			return
+		}
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -19,21 +27,20 @@ func LogsHandler(database *db.DB, cfg *config.Config) http.HandlerFunc {
 		limit := queryInt(r, "limit", 50)
 		offset := queryInt(r, "offset", 0)
 		hookIDStr := r.URL.Query().Get("hook_id")
+		status := r.URL.Query().Get("status")
+		search := r.URL.Query().Get("search")
 
-		var logs []db.ExecutionLog
-		var err error
-
+		var hookID int64
 		if hookIDStr != "" {
-			hookID, e := strconv.ParseInt(hookIDStr, 10, 64)
+			var e error
+			hookID, e = strconv.ParseInt(hookIDStr, 10, 64)
 			if e != nil {
 				writeError(w, http.StatusBadRequest, "invalid hook_id")
 				return
 			}
-			logs, err = database.ListLogsByHook(hookID, limit, offset)
-		} else {
-			logs, err = database.ListLogs(limit, offset)
 		}
 
+		logs, err := database.ListLogsFiltered(hookID, status, search, limit, offset)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
