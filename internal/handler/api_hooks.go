@@ -34,7 +34,7 @@ func LoginHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 		token := generateToken()
-		sessions[token] = time.Now().Add(24 * time.Hour)
+		SetSession(token, time.Now().Add(24*time.Hour))
 		http.SetCookie(w, &http.Cookie{
 			Name:     "seh_session",
 			Value:    token,
@@ -50,7 +50,7 @@ func LoginHandler(cfg *config.Config) http.HandlerFunc {
 func LogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := extractToken(r)
-		delete(sessions, token)
+		DeleteSession(token)
 		http.SetCookie(w, &http.Cookie{Name: "seh_session", Value: "", MaxAge: -1, Path: "/"})
 		writeOK(w, "logged out")
 	}

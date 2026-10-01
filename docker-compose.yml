@@ -1,5 +1,6 @@
 services:
   sehooks:
+    build: .
     image: ghcr.io/exirostudio/script-execution-hooks:latest
     container_name: sehooks
     restart: unless-stopped

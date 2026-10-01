@@ -126,7 +126,7 @@ func TestDirectScriptRunAndFilter(t *testing.T) {
 
 	// Add auth session
 	token := "session123"
-	sessions[token] = time.Now().Add(1 * time.Hour)
+	SetSession(token, time.Now().Add(1*time.Hour))
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	w := httptest.NewRecorder()
@@ -167,3 +167,27 @@ func TestDirectScriptRunAndFilter(t *testing.T) {
 		t.Fatalf("expected 0 logs after clear, got %d", len(afterLogs))
 	}
 }
+
+func TestConcurrentSessions(t *testing.T) {
+	token := "concurrent-token"
+	SetSession(token, time.Now().Add(1*time.Hour))
+
+	done := make(chan bool)
+	for i := 0; i < 50; i++ {
+		go func(idx int) {
+			if idx%3 == 0 {
+				SetSession(fmt.Sprintf("token-%d", idx), time.Now().Add(1*time.Hour))
+			} else if idx%3 == 1 {
+				ValidateAndRefreshSession(token)
+			} else {
+				DeleteSession(fmt.Sprintf("token-%d", idx))
+			}
+			done <- true
+		}(i)
+	}
+
+	for i := 0; i < 50; i++ {
+		<-done
+	}
+}
+
