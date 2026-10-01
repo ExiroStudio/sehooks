@@ -38,7 +38,9 @@ RUN mkdir -p /data
 # Default environment configuration
 ENV SEH_HOST=0.0.0.0 \
     SEH_PORT=8080 \
-    SEH_DB_PATH=/data/hooks.db
+    SEH_DB_PATH=/data/hooks.db \
+    HOME=/root \
+    DOCKER_CONFIG=/root/.docker
 
 WORKDIR /app
 
