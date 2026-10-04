@@ -36,20 +36,33 @@ type Hook struct {
 	EnvName    string `json:"env_name,omitempty"`
 }
 
-// Script represents a stored shell script
+// ScriptFile represents an auxiliary file stored for a script (e.g. nginx.conf, Dockerfile)
+type ScriptFile struct {
+	ID        int64     `json:"id"`
+	ScriptID  int64     `json:"script_id"`
+	Path      string    `json:"path"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Script represents a stored shell script or docker compose project
 type Script struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	Content        string    `json:"content"`
-	TimeoutSeconds int       `json:"timeout_seconds"`
-	EnvVars        string    `json:"env_vars"` // JSON string: {"KEY":"VAL"}
-	EnvID          *int64    `json:"env_id"`
-	WorkingDir     string    `json:"working_dir"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             int64        `json:"id"`
+	Name           string       `json:"name"`
+	Description    string       `json:"description"`
+	ScriptType     string       `json:"script_type"` // "bash" (default) or "docker_compose"
+	Content        string       `json:"content"`     // Bash script or docker-compose.yml
+	ComposeCmd     string       `json:"compose_cmd"` // Custom compose command (e.g. docker compose up -d)
+	TimeoutSeconds int          `json:"timeout_seconds"`
+	EnvVars        string       `json:"env_vars"` // JSON string: {"KEY":"VAL"}
+	EnvID          *int64       `json:"env_id"`
+	WorkingDir     string       `json:"working_dir"`
+	CreatedAt      time.Time    `json:"created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"`
 	// Joined
-	EnvName string `json:"env_name,omitempty"`
+	EnvName string       `json:"env_name,omitempty"`
+	Files   []ScriptFile `json:"files,omitempty"`
 }
 
 // ExecutionLog represents a single hook execution record

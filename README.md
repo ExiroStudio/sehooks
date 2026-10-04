@@ -177,10 +177,26 @@ seh_import_env
 
 # Restart Docker containers or systemd service
 docker compose down
-docker compose up -d --build
-
 echo "Deployment completed successfully!"
 ```
+
+---
+
+## 🐳 Docker Compose & Additional Files (e.g. `nginx.conf`)
+
+sehooks supports native **Docker Compose** projects alongside standard Bash scripts, as well as managing **Additional Files**:
+
+### 1. Execution Methods:
+- **🐧 Bash Script (`bash`)**: Traditional shell script execution with built-in helpers.
+- **🐳 Docker Compose (`docker_compose`)**: Dedicated runner for Docker Compose. The main editor stores `docker-compose.yml`, environment profiles automatically sync into `.env`, and your custom compose commands (e.g. `docker compose up -d --build --remove-orphans`) run safely with process isolation.
+
+### 2. Additional Files:
+Attach auxiliary configuration files to any script or compose project:
+- `nginx.conf`, `conf.d/app.conf`
+- `Dockerfile`
+- Application configuration files (`config.yaml`, `init.sql`, etc.)
+
+Before execution begins, sehooks validates relative paths against directory traversal and writes these files directly into the project's `working_dir` so they are immediately accessible to bind mounts and scripts.
 
 ---
 

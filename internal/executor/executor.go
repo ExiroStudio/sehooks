@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,132 @@ type Result struct {
 	DurationMs int64
 	Status     string // success, failed, timeout
 	Error      error
+}
+
+// FileToDeploy represents an additional file to write to the working directory
+type FileToDeploy struct {
+	Path    string
+	Content string
+}
+
+// ScriptOptions holds parameters for script execution
+type ScriptOptions struct {
+	ScriptID       int64
+	ScriptType     string // "bash" or "docker_compose"
+	Content        string // Bash script or docker-compose.yml
+	ComposeCmd     string // Custom compose command
+	WorkingDir     string
+	EnvVars        map[string]string
+	TimeoutSeconds int
+	Payload        string
+	Files          []FileToDeploy
+}
+
+// SafeRelPath validates and returns a clean, safe absolute path inside baseDir
+func SafeRelPath(baseDir, relPath string) (string, error) {
+	relPath = strings.TrimSpace(relPath)
+	if relPath == "" {
+		return "", fmt.Errorf("file path cannot be empty")
+	}
+	if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "/") || strings.HasPrefix(relPath, "\\") {
+		return "", fmt.Errorf("path must be relative, not absolute: %s", relPath)
+	}
+	cleanRel := filepath.Clean(relPath)
+	if cleanRel == "." || cleanRel == ".." || strings.HasPrefix(cleanRel, ".."+string(filepath.Separator)) || strings.HasPrefix(cleanRel, "../") {
+		return "", fmt.Errorf("path cannot traverse outside working directory: %s", relPath)
+	}
+
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		absBase = baseDir
+	}
+	targetPath := filepath.Join(absBase, cleanRel)
+	cleanTarget := filepath.Clean(targetPath)
+
+	if !strings.HasPrefix(cleanTarget, absBase+string(filepath.Separator)) && cleanTarget != absBase {
+		return "", fmt.Errorf("path escapes working directory: %s", relPath)
+	}
+
+	return cleanTarget, nil
+}
+
+// WriteAdditionalFiles safely writes extra files to the working directory
+func WriteAdditionalFiles(workingDir string, files []FileToDeploy) error {
+	for _, f := range files {
+		target, err := SafeRelPath(workingDir, f.Path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return fmt.Errorf("create dir for %s: %w", f.Path, err)
+		}
+		if err := os.WriteFile(target, []byte(f.Content), 0644); err != nil {
+			return fmt.Errorf("write file %s: %w", f.Path, err)
+		}
+	}
+	return nil
+}
+
+// WriteDotEnvFile writes .env directly in workingDir for Docker Compose
+func WriteDotEnvFile(workingDir string, envVars map[string]string) error {
+	if len(envVars) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	buf.WriteString("# Generated automatically by SEHooks\n")
+	for k, v := range envVars {
+		if isValidEnvKey(k) && !strings.HasPrefix(k, "SEH_") {
+			escaped := strings.ReplaceAll(v, "\\", "\\\\")
+			escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+			escaped = strings.ReplaceAll(escaped, "\n", "\\n")
+			buf.WriteString(fmt.Sprintf("%s=\"%s\"\n", k, escaped))
+		}
+	}
+	targetPath := filepath.Join(workingDir, ".env")
+	return os.WriteFile(targetPath, buf.Bytes(), 0600)
+}
+
+// RunScript executes a script with full support for bash/docker-compose and additional files
+func RunScript(opts ScriptOptions) Result {
+	workDir := strings.TrimSpace(opts.WorkingDir)
+	if workDir == "" || workDir == "/tmp" {
+		if opts.ScriptID > 0 {
+			workDir = fmt.Sprintf("/tmp/sehooks/scripts/%d", opts.ScriptID)
+		} else {
+			workDir = "/tmp"
+		}
+	}
+
+	if opts.ScriptType == "docker_compose" {
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			return Result{Status: "failed", Error: err, Stderr: err.Error(), ExitCode: -1}
+		}
+		composePath := filepath.Join(workDir, "docker-compose.yml")
+		if err := os.WriteFile(composePath, []byte(opts.Content), 0644); err != nil {
+			return Result{Status: "failed", Error: fmt.Errorf("write docker-compose.yml: %w", err), Stderr: err.Error(), ExitCode: -1}
+		}
+		if err := WriteAdditionalFiles(workDir, opts.Files); err != nil {
+			return Result{Status: "failed", Error: fmt.Errorf("write additional files: %w", err), Stderr: err.Error(), ExitCode: -1}
+		}
+		_ = WriteDotEnvFile(workDir, opts.EnvVars)
+
+		cmd := strings.TrimSpace(opts.ComposeCmd)
+		if cmd == "" {
+			cmd = "docker compose up -d --remove-orphans"
+		}
+		return RunWithPayload(cmd, workDir, opts.EnvVars, opts.TimeoutSeconds, opts.Payload)
+	}
+
+	// Bash mode
+	if len(opts.Files) > 0 {
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			return Result{Status: "failed", Error: err, Stderr: err.Error(), ExitCode: -1}
+		}
+		if err := WriteAdditionalFiles(workDir, opts.Files); err != nil {
+			return Result{Status: "failed", Error: fmt.Errorf("write additional files: %w", err), Stderr: err.Error(), ExitCode: -1}
+		}
+	}
+	return RunWithPayload(opts.Content, workDir, opts.EnvVars, opts.TimeoutSeconds, opts.Payload)
 }
 
 // Run executes a shell script safely with the given options

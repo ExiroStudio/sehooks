@@ -288,4 +288,90 @@ func TestEnvironmentsAPIAndExecution(t *testing.T) {
 	}
 }
 
+func TestDockerComposeAndAdditionalFilesAPI(t *testing.T) {
+	database, dbPath := setupTestDB(t)
+	defer os.Remove(dbPath)
+	defer database.Close()
+
+	cfg := &config.Config{
+		AdminPassword: "testpassword",
+		SecretKey:     "testkey",
+		DatabasePath:  dbPath,
+	}
+
+	workDir, err := os.MkdirTemp("", "seh-api-compose-*")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	// 1. Create docker_compose script via API
+	body := map[string]any{
+		"name":            "API Compose Test",
+		"description":     "Test docker compose & files",
+		"script_type":     "docker_compose",
+		"content":         "version: '3.8'\nservices:\n  app:\n    image: nginx:alpine",
+		"compose_cmd":     "cat docker-compose.yml; echo '---'; cat nginx.conf",
+		"working_dir":     workDir,
+		"timeout_seconds": 5,
+		"files": []map[string]string{
+			{"path": "nginx.conf", "content": "events {} http { server { listen 80; } }"},
+		},
+	}
+	token := "test-session-compose"
+	SetSession(token, time.Now().Add(1*time.Hour))
+
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/scripts", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	ScriptsHandler(database, cfg).ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data db.Script `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if resp.Data.ScriptType != "docker_compose" {
+		t.Fatalf("expected script_type docker_compose, got %s", resp.Data.ScriptType)
+	}
+	if len(resp.Data.Files) != 1 || resp.Data.Files[0].Path != "nginx.conf" {
+		t.Fatalf("expected 1 file nginx.conf, got %+v", resp.Data.Files)
+	}
+
+	// 2. Run script directly
+	runReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/scripts/%d/run", resp.Data.ID), nil)
+	runReq.URL.Path = fmt.Sprintf("/api/scripts/%d/run", resp.Data.ID)
+	runReq.Header.Set("Authorization", "Bearer "+token)
+	runW := httptest.NewRecorder()
+	ScriptHandler(database, cfg).ServeHTTP(runW, runReq)
+
+	if runW.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted, got %d: %s", runW.Code, runW.Body.String())
+	}
+
+	time.Sleep(1 * time.Second)
+
+	logs, err := database.ListLogs(1, 0)
+	if err != nil || len(logs) == 0 {
+		t.Fatalf("expected log entry, got %v", err)
+	}
+
+	lastLog := logs[0]
+	if lastLog.Status != "success" {
+		t.Fatalf("expected success, got %s (stderr: %s)", lastLog.Status, lastLog.Stderr)
+	}
+	if !strings.Contains(lastLog.Stdout, "version: '3.8'") {
+		t.Fatalf("expected stdout to contain docker-compose.yml content, got %s", lastLog.Stdout)
+	}
+	if !strings.Contains(lastLog.Stdout, "events {} http { server { listen 80; } }") {
+		t.Fatalf("expected stdout to contain nginx.conf content, got %s", lastLog.Stdout)
+	}
+}
+
 

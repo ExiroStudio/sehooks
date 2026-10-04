@@ -97,9 +97,28 @@ func WebhookHandler(database *db.DB) http.HandlerFunc {
 		envVars["SEH_HOOK_SLUG"] = hook.Slug
 		envVars["SEH_TRIGGER_IP"] = clientIP
 
+		var filesToDeploy []executor.FileToDeploy
+		for _, f := range script.Files {
+			filesToDeploy = append(filesToDeploy, executor.FileToDeploy{
+				Path:    f.Path,
+				Content: f.Content,
+			})
+		}
+
 		// Execute script asynchronously
 		go func() {
-			result := executor.RunWithPayload(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds, payload)
+			opts := executor.ScriptOptions{
+				ScriptID:       script.ID,
+				ScriptType:     script.ScriptType,
+				Content:        script.Content,
+				ComposeCmd:     script.ComposeCmd,
+				WorkingDir:     script.WorkingDir,
+				EnvVars:        envVars,
+				TimeoutSeconds: script.TimeoutSeconds,
+				Payload:        payload,
+				Files:          filesToDeploy,
+			}
+			result := executor.RunScript(opts)
 			exitCode := &result.ExitCode
 			if err := database.UpdateLog(logID, exitCode, result.Stdout, result.Stderr, result.DurationMs, result.Status); err != nil {
 				log.Printf("update log error: %v", err)

@@ -296,20 +296,25 @@ function renderScripts() {
   const el = document.getElementById('scripts-list');
   if (!state.scripts.length) {
     el.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
-      <h3>No scripts yet</h3><p>Create a shell script to link to a hook</p>
+      <h3>No scripts yet</h3><p>Create a shell script or Docker Compose project to link to a hook</p>
       <button class="btn btn-primary" onclick="openScriptModal()">Create Script</button>
     </div>`; return;
   }
-  el.innerHTML = state.scripts.map(s => `
+  el.innerHTML = state.scripts.map(s => {
+    const isCompose = s.script_type === 'docker_compose';
+    const filesCount = s.files ? s.files.length : 0;
+    return `
     <div class="script-card">
       <div class="card-header-row">
         <div class="card-title">
           <span class="badge-id" title="Click to copy ID" onclick="copyText('${s.id}', 'Script ID #${s.id} copied!', this)">#${s.id}</span>
-          📄 ${escHtml(s.name)}
+          ${isCompose ? '🐳' : '📄'} ${escHtml(s.name)}
         </div>
       </div>
       <div class="card-desc">${escHtml(s.description || 'No description')}</div>
       <div class="card-meta">
+        ${isCompose ? `<span class="badge badge-compose">🐳 Compose</span>` : `<span class="badge badge-muted">🐧 Bash</span>`}
+        ${filesCount > 0 ? `<span class="badge badge-muted" title="${s.files.map(f => escHtml(f.path)).join(', ')}">📎 ${filesCount} file${filesCount > 1 ? 's' : ''}</span>` : ''}
         <span class="badge badge-muted">⏱ ${s.timeout_seconds}s timeout</span>
         <span class="badge badge-muted">📁 ${escHtml(s.working_dir)}</span>
         ${s.env_name ? `<span class="badge badge-success">🔐 ${escHtml(s.env_name)}</span>` : ''}
@@ -322,27 +327,227 @@ function renderScripts() {
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
         </button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+let modalScriptFiles = [];
+let modalEditingFileIndex = -1;
+
+function renderModalFiles() {
+  const container = document.getElementById('files-list-container');
+  if (!container) return;
+  if (!modalScriptFiles.length) {
+    container.innerHTML = `<div style="font-size:12px;color:var(--text-muted);font-style:italic;padding:4px 0">No additional files added yet.</div>`;
+    return;
+  }
+  container.innerHTML = modalScriptFiles.map((f, i) => `
+    <div class="file-row-item">
+      <div class="file-row-path">
+        <span>📄</span>
+        <strong>${escHtml(f.path)}</strong>
+        <span class="file-row-meta">(${f.content.length} chars)</span>
+      </div>
+      <div class="file-row-actions">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="editModalFile(${i})">Edit</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="removeModalFile(${i})">Remove</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function showAddFileForm(index = -1) {
+  modalEditingFileIndex = index;
+  const form = document.getElementById('add-file-form');
+  const pathInput = document.getElementById('new-file-path');
+  const contentInput = document.getElementById('new-file-content');
+  if (index >= 0 && modalScriptFiles[index]) {
+    pathInput.value = modalScriptFiles[index].path;
+    contentInput.value = modalScriptFiles[index].content;
+  } else {
+    pathInput.value = '';
+    contentInput.value = '';
+  }
+  form.classList.remove('hidden');
+  pathInput.focus();
+}
+
+function hideAddFileForm() {
+  const form = document.getElementById('add-file-form');
+  if (form) form.classList.add('hidden');
+  modalEditingFileIndex = -1;
+}
+
+function saveModalFile() {
+  const pathInput = document.getElementById('new-file-path');
+  const contentInput = document.getElementById('new-file-content');
+  const path = (pathInput.value || '').trim();
+  const content = contentInput.value || '';
+
+  if (!path) {
+    toast('File path / filename is required', 'error');
+    return;
+  }
+  if (path.startsWith('/') || path.startsWith('\\') || path.includes('..')) {
+    toast('File path must be relative without ".." traversal', 'error');
+    return;
+  }
+
+  if (modalEditingFileIndex >= 0 && modalEditingFileIndex < modalScriptFiles.length) {
+    modalScriptFiles[modalEditingFileIndex] = { path, content };
+    toast(`File "${path}" updated`, 'success');
+  } else {
+    if (modalScriptFiles.some(f => f.path === path)) {
+      toast(`File "${path}" already exists in this script`, 'error');
+      return;
+    }
+    modalScriptFiles.push({ path, content });
+    toast(`File "${path}" added`, 'success');
+  }
+  hideAddFileForm();
+  renderModalFiles();
+}
+
+function editModalFile(index) {
+  showAddFileForm(index);
+}
+
+function removeModalFile(index) {
+  if (index >= 0 && index < modalScriptFiles.length) {
+    const removed = modalScriptFiles.splice(index, 1);
+    toast(`Removed ${removed[0]?.path}`, 'info');
+    renderModalFiles();
+  }
+}
+
+function setScriptType(type) {
+  const typeInput = document.getElementById('sc-type');
+  if (typeInput) typeInput.value = type;
+
+  const btnBash = document.getElementById('btn-type-bash');
+  const btnCompose = document.getElementById('btn-type-compose');
+  if (btnBash && btnCompose) {
+    if (type === 'docker_compose') {
+      btnCompose.classList.add('active');
+      btnBash.classList.remove('active');
+    } else {
+      btnBash.classList.add('active');
+      btnCompose.classList.remove('active');
+    }
+  }
+
+  const label = document.getElementById('sc-content-label');
+  const hint = document.getElementById('sc-content-hint');
+  const helperBtn = document.getElementById('sc-compose-helper-btn');
+  const composeGroup = document.getElementById('sc-compose-cmd-group');
+
+  if (type === 'docker_compose') {
+    if (label) label.innerText = 'docker-compose.yml *';
+    if (hint) hint.innerHTML = 'Docker Compose YAML format. Environment variables from your profile are automatically injected into working_dir/.env.';
+    if (helperBtn) helperBtn.style.display = 'block';
+    if (composeGroup) composeGroup.style.display = 'block';
+  } else {
+    if (label) label.innerText = 'Shell Script *';
+    if (hint) hint.innerHTML = 'bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.';
+    if (helperBtn) helperBtn.style.display = 'none';
+    if (composeGroup) composeGroup.style.display = 'none';
+  }
+}
+
+function setComposeCmd(cmd) {
+  const input = document.getElementById('sc-compose-cmd');
+  if (input) input.value = cmd;
+}
+
+function insertSampleCompose() {
+  const content = document.getElementById('sc-content');
+  if (!content) return;
+  const sample = `services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "\${PORT:-80}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped`;
+  if (content.value.trim() && !confirm('Replace current content with sample docker-compose.yml?')) {
+    return;
+  }
+  content.value = sample;
+  if (!modalScriptFiles.some(f => f.path === 'nginx.conf')) {
+    modalScriptFiles.push({
+      path: 'nginx.conf',
+      content: `events { worker_connections 1024; }
+http {
+  server {
+    listen 80;
+    location / {
+      return 200 "Hello from Docker Compose via SEHooks!\\n";
+    }
+  }
+}`
+    });
+    renderModalFiles();
+    toast('Added sample nginx.conf to Additional Files', 'info');
+  }
 }
 
 function openScriptModal(id) {
   const s = id ? state.scripts.find(x => x.id === id) : null;
+  const currentType = s?.script_type || 'bash';
+  modalScriptFiles = (s?.files || []).map(f => ({ path: f.path, content: f.content }));
+
   const envOptions = state.environments.map(e => `<option value="${e.id}" ${s?.env_id == e.id ? 'selected' : ''}>${escHtml(e.name)} (${e.variables?.length || 0} vars)</option>`).join('');
+
   openModal(s ? 'Edit Script' : 'New Script', `
     <form id="script-form">
       <div class="form-group">
         <label for="sc-name">Name *</label>
-        <input id="sc-name" type="text" placeholder="e.g. Deploy App" value="${escHtml(s?.name || '')}" required />
+        <input id="sc-name" type="text" placeholder="e.g. Deploy Web App" value="${escHtml(s?.name || '')}" required />
       </div>
       <div class="form-group">
         <label for="sc-desc">Description</label>
         <input id="sc-desc" type="text" placeholder="What does this script do?" value="${escHtml(s?.description || '')}" />
       </div>
+
       <div class="form-group">
-        <label for="sc-content">Shell Script *</label>
-        <textarea id="sc-content" placeholder="#!/bin/bash&#10;echo 'Hello from hook!'">${escHtml(s?.content || '')}</textarea>
-        <div class="hint">bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.</div>
+        <label>Execution Method *</label>
+        <div class="segmented-control">
+          <button type="button" id="btn-type-bash" class="segment-btn ${currentType === 'bash' ? 'active' : ''}" onclick="setScriptType('bash')">
+            🐧 Bash Script
+          </button>
+          <button type="button" id="btn-type-compose" class="segment-btn ${currentType === 'docker_compose' ? 'active' : ''}" onclick="setScriptType('docker_compose')">
+            🐳 Docker Compose
+          </button>
+        </div>
+        <input type="hidden" id="sc-type" value="${currentType}" />
       </div>
+
+      <div class="form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label id="sc-content-label" for="sc-content" style="margin:0">${currentType === 'docker_compose' ? 'docker-compose.yml *' : 'Shell Script *'}</label>
+          <div id="sc-compose-helper-btn" style="${currentType === 'docker_compose' ? '' : 'display:none'}">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="insertSampleCompose()">📄 Insert Template</button>
+          </div>
+        </div>
+        <textarea id="sc-content" class="raw-env-textarea" placeholder="${currentType === 'docker_compose' ? 'services:\n  app:\n    image: nginx:alpine' : '#!/bin/bash\necho \'Hello from hook!\''}">${escHtml(s?.content || '')}</textarea>
+        <div id="sc-content-hint" class="hint">${currentType === 'docker_compose' ? 'Docker Compose YAML format. Environment variables from your profile are automatically injected into working_dir/.env.' : 'bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.'}</div>
+      </div>
+
+      <div id="sc-compose-cmd-group" class="form-group" style="${currentType === 'docker_compose' ? '' : 'display:none'}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label for="sc-compose-cmd" style="margin:0">Compose Command *</label>
+          <div class="quick-presets">
+            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose up -d --build --remove-orphans')">Build & Up</button>
+            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose pull && docker compose up -d --remove-orphans')">Pull & Up</button>
+            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose restart')">Restart</button>
+            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose down')">Down</button>
+          </div>
+        </div>
+        <textarea id="sc-compose-cmd" style="min-height:54px;font-family:var(--mono);font-size:12.5px" placeholder="docker compose up -d --build --remove-orphans">${escHtml(s?.compose_cmd || 'docker compose up -d --build --remove-orphans')}</textarea>
+        <div class="hint">Custom compose commands to execute. Multi-line bash commands are supported.</div>
+      </div>
+
       <div class="form-row">
         <div class="form-group">
           <label for="sc-timeout">Timeout (seconds)</label>
@@ -351,12 +556,35 @@ function openScriptModal(id) {
         <div class="form-group">
           <label for="sc-workdir">Working Directory</label>
           <input id="sc-workdir" type="text" placeholder="/tmp" value="${escHtml(s?.working_dir || '/tmp')}" />
+          <div class="hint" style="font-size:11px">Files and compose projects will be placed here.</div>
         </div>
       </div>
+
+      <div class="form-group" style="border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; background: rgba(255,255,255,0.015);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <label style="margin:0;font-weight:600">📎 Additional Files</label>
+            <div style="font-size:11.5px;color:var(--text-secondary)">Extra config files deployed to working directory (e.g. <code>nginx.conf</code>, <code>Dockerfile</code>, <code>conf.d/app.conf</code>)</div>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="showAddFileForm()">+ Add File</button>
+        </div>
+
+        <div id="add-file-form" class="hidden" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <input type="text" id="new-file-path" placeholder="Relative path (e.g. nginx.conf or conf.d/default.conf)" style="font-family:var(--mono);font-size:12px;flex:1;" />
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveModalFile()">Done</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="hideAddFileForm()">Cancel</button>
+          </div>
+          <textarea id="new-file-content" class="raw-env-textarea" style="min-height:120px;font-size:12px" placeholder="# Enter file content here..."></textarea>
+        </div>
+
+        <div id="files-list-container"></div>
+      </div>
+
       <div class="form-group">
         <label for="sc-env-profile">Environment Profile (Optional)</label>
         <select id="sc-env-profile"><option value="">— None —</option>${envOptions}</select>
-        <div class="hint">Select an environment profile to inject variables into execution & $SEH_ENV_FILE.</div>
+        <div class="hint">Select an environment profile to inject variables into execution & $SEH_ENV_FILE / .env.</div>
       </div>
       <div class="form-group">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -372,17 +600,23 @@ function openScriptModal(id) {
       </div>
     </form>
   `);
+
+  renderModalFiles();
+
   document.getElementById('script-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const envProfileVal = document.getElementById('sc-env-profile').value;
     const payload = {
       name: document.getElementById('sc-name').value,
       description: document.getElementById('sc-desc').value,
+      script_type: document.getElementById('sc-type').value,
       content: document.getElementById('sc-content').value,
+      compose_cmd: document.getElementById('sc-compose-cmd')?.value || '',
       timeout_seconds: parseInt(document.getElementById('sc-timeout').value) || 30,
       working_dir: document.getElementById('sc-workdir').value || '/tmp',
       env_vars: document.getElementById('sc-env').value || '{}',
       env_id: envProfileVal ? parseInt(envProfileVal) : null,
+      files: modalScriptFiles,
     };
     try {
       if (s) await api.put(`/api/scripts/${s.id}`, payload);

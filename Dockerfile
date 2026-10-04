@@ -30,7 +30,8 @@ RUN apk add --no-cache \
     git \
     openssh-client \
     tzdata \
-    docker-cli
+    docker-cli \
+    docker-cli-compose
 
 # Directory for SQLite database persistence
 RUN mkdir -p /data

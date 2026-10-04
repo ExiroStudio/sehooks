@@ -22,7 +22,15 @@ func TestDBMigrationAndRecovery(t *testing.T) {
 	defer d.Close()
 
 	// Insert running log
-	hookID := int64(1)
+	hookID, err := d.CreateHook(&Hook{
+		Name:        "Test Hook",
+		Slug:        "test-hook",
+		SecretToken: "test-token-123",
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateHook error: %v", err)
+	}
 	logID, err := d.CreateLog(&ExecutionLog{
 		HookID:    &hookID,
 		TriggerIP: "127.0.0.1",
@@ -151,5 +159,86 @@ func TestEnvironmentCRUDAndEncryption(t *testing.T) {
 	}
 	if h.EnvID == nil || *h.EnvID != envID || h.EnvName != "Backend Production" {
 		t.Fatalf("expected hook to have EnvID %d and EnvName 'Backend Production', got %+v", envID, h)
+	}
+}
+
+func TestScriptTypeAndAdditionalFiles(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "test-db-files-*.db")
+	if err != nil {
+		t.Fatalf("create temp db: %v", err)
+	}
+	tmpFile.Close()
+	path := tmpFile.Name()
+	defer os.Remove(path)
+
+	d, err := New(path)
+	if err != nil {
+		t.Fatalf("New db error: %v", err)
+	}
+	defer d.Close()
+
+	// 1. Create docker_compose script with additional files
+	scriptID, err := d.CreateScript(&Script{
+		Name:           "Compose App",
+		Description:    "Docker Compose Project",
+		ScriptType:     "docker_compose",
+		Content:        "services:\n  web:\n    image: nginx:alpine",
+		ComposeCmd:     "docker compose up -d --build",
+		TimeoutSeconds: 60,
+		WorkingDir:     "/var/www/testapp",
+		Files: []ScriptFile{
+			{Path: "nginx.conf", Content: "events {} http { server { listen 80; } }"},
+			{Path: "conf.d/default.conf", Content: "# Default server block"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateScript error: %v", err)
+	}
+
+	// 2. Fetch and verify
+	s, err := d.GetScriptByID(scriptID)
+	if err != nil || s == nil {
+		t.Fatalf("GetScriptByID error: %v", err)
+	}
+	if s.ScriptType != "docker_compose" {
+		t.Fatalf("expected script_type 'docker_compose', got %q", s.ScriptType)
+	}
+	if s.ComposeCmd != "docker compose up -d --build" {
+		t.Fatalf("expected compose_cmd 'docker compose up -d --build', got %q", s.ComposeCmd)
+	}
+	if len(s.Files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(s.Files))
+	}
+	if s.Files[0].Path != "conf.d/default.conf" && s.Files[1].Path != "conf.d/default.conf" {
+		t.Fatalf("expected conf.d/default.conf in files, got %+v", s.Files)
+	}
+
+	// 3. Update script with new files
+	s.ComposeCmd = "docker compose down && docker compose up -d"
+	s.Files = []ScriptFile{
+		{Path: "nginx.conf", Content: "updated content"},
+	}
+	if err := d.UpdateScript(s); err != nil {
+		t.Fatalf("UpdateScript error: %v", err)
+	}
+
+	sUpdated, err := d.GetScriptByID(scriptID)
+	if err != nil {
+		t.Fatalf("GetScriptByID error: %v", err)
+	}
+	if len(sUpdated.Files) != 1 || sUpdated.Files[0].Content != "updated content" {
+		t.Fatalf("expected 1 updated file, got %+v", sUpdated.Files)
+	}
+
+	// 4. Verify cascade delete
+	if err := d.DeleteScript(scriptID); err != nil {
+		t.Fatalf("DeleteScript error: %v", err)
+	}
+	remainingFiles, err := d.GetScriptFiles(scriptID)
+	if err != nil {
+		t.Fatalf("GetScriptFiles error: %v", err)
+	}
+	if len(remainingFiles) != 0 {
+		t.Fatalf("expected 0 files after script delete, got %d", len(remainingFiles))
 	}
 }

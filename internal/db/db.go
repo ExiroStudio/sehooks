@@ -24,6 +24,7 @@ func New(path string, secretKey ...string) (*DB, error) {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	conn.SetMaxOpenConns(1) // SQLite is single-writer
+	_, _ = conn.Exec("PRAGMA foreign_keys = ON;")
 	sk := "sehooks-default-key-change-me"
 	if len(secretKey) > 0 && secretKey[0] != "" {
 		sk = secretKey[0]
@@ -56,13 +57,25 @@ func (d *DB) migrate() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
 		description TEXT DEFAULT '',
+		script_type TEXT DEFAULT 'bash',
 		content TEXT NOT NULL DEFAULT '',
+		compose_cmd TEXT DEFAULT '',
 		timeout_seconds INTEGER DEFAULT 30,
 		env_vars TEXT DEFAULT '{}',
 		env_id INTEGER REFERENCES environments(id) ON DELETE SET NULL,
 		working_dir TEXT DEFAULT '/tmp',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS script_files (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		script_id INTEGER NOT NULL REFERENCES scripts(id) ON DELETE CASCADE,
+		path TEXT NOT NULL,
+		content TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(script_id, path)
 	);
 
 	CREATE TABLE IF NOT EXISTS hooks (
@@ -110,6 +123,20 @@ func (d *DB) migrate() error {
 	_ = d.conn.QueryRow(`SELECT count(*) FROM pragma_table_info('scripts') WHERE name = 'env_id'`).Scan(&hasScriptEnvID)
 	if hasScriptEnvID == 0 {
 		_, _ = d.conn.Exec(`ALTER TABLE scripts ADD COLUMN env_id INTEGER REFERENCES environments(id) ON DELETE SET NULL`)
+	}
+
+	// Add script_type to scripts if missing
+	var hasScriptType int
+	_ = d.conn.QueryRow(`SELECT count(*) FROM pragma_table_info('scripts') WHERE name = 'script_type'`).Scan(&hasScriptType)
+	if hasScriptType == 0 {
+		_, _ = d.conn.Exec(`ALTER TABLE scripts ADD COLUMN script_type TEXT DEFAULT 'bash'`)
+	}
+
+	// Add compose_cmd to scripts if missing
+	var hasComposeCmd int
+	_ = d.conn.QueryRow(`SELECT count(*) FROM pragma_table_info('scripts') WHERE name = 'compose_cmd'`).Scan(&hasComposeCmd)
+	if hasComposeCmd == 0 {
+		_, _ = d.conn.Exec(`ALTER TABLE scripts ADD COLUMN compose_cmd TEXT DEFAULT ''`)
 	}
 
 	// Add env_id to hooks if missing
@@ -375,7 +402,7 @@ func (d *DB) RegenToken(id int64, token string) error {
 
 func (d *DB) ListScripts() ([]Script, error) {
 	rows, err := d.conn.Query(`
-		SELECT s.id, s.name, s.description, s.content, s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
+		SELECT s.id, s.name, s.description, COALESCE(s.script_type, 'bash'), s.content, COALESCE(s.compose_cmd, ''), s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
 		FROM scripts s
 		LEFT JOIN environments e ON e.id = s.env_id
 		ORDER BY s.created_at DESC`)
@@ -386,48 +413,142 @@ func (d *DB) ListScripts() ([]Script, error) {
 	var scripts []Script
 	for rows.Next() {
 		var s Script
-		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Content, &s.TimeoutSeconds, &s.EnvVars, &s.EnvID, &s.WorkingDir, &s.CreatedAt, &s.UpdatedAt, &s.EnvName); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.ScriptType, &s.Content, &s.ComposeCmd, &s.TimeoutSeconds, &s.EnvVars, &s.EnvID, &s.WorkingDir, &s.CreatedAt, &s.UpdatedAt, &s.EnvName); err != nil {
 			return nil, err
 		}
 		scripts = append(scripts, s)
+	}
+	if scripts == nil {
+		scripts = []Script{}
+	}
+	for i := range scripts {
+		if files, err := d.GetScriptFiles(scripts[i].ID); err == nil {
+			scripts[i].Files = files
+		} else {
+			scripts[i].Files = []ScriptFile{}
+		}
 	}
 	return scripts, nil
 }
 
 func (d *DB) GetScriptByID(id int64) (*Script, error) {
 	row := d.conn.QueryRow(`
-		SELECT s.id, s.name, s.description, s.content, s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
+		SELECT s.id, s.name, s.description, COALESCE(s.script_type, 'bash'), s.content, COALESCE(s.compose_cmd, ''), s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
 		FROM scripts s
 		LEFT JOIN environments e ON e.id = s.env_id
 		WHERE s.id=?`, id)
 	var s Script
-	err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Content, &s.TimeoutSeconds, &s.EnvVars, &s.EnvID, &s.WorkingDir, &s.CreatedAt, &s.UpdatedAt, &s.EnvName)
+	err := row.Scan(&s.ID, &s.Name, &s.Description, &s.ScriptType, &s.Content, &s.ComposeCmd, &s.TimeoutSeconds, &s.EnvVars, &s.EnvID, &s.WorkingDir, &s.CreatedAt, &s.UpdatedAt, &s.EnvName)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &s, err
+	if err != nil {
+		return nil, err
+	}
+	files, err := d.GetScriptFiles(id)
+	if err == nil {
+		s.Files = files
+	} else {
+		s.Files = []ScriptFile{}
+	}
+	return &s, nil
 }
 
 func (d *DB) CreateScript(s *Script) (int64, error) {
+	if s.ScriptType == "" {
+		s.ScriptType = "bash"
+	}
 	res, err := d.conn.Exec(`
-		INSERT INTO scripts(name, description, content, timeout_seconds, env_vars, env_id, working_dir)
-		VALUES(?,?,?,?,?,?,?)`,
-		s.Name, s.Description, s.Content, s.TimeoutSeconds, s.EnvVars, s.EnvID, s.WorkingDir)
+		INSERT INTO scripts(name, description, script_type, content, compose_cmd, timeout_seconds, env_vars, env_id, working_dir)
+		VALUES(?,?,?,?,?,?,?,?,?)`,
+		s.Name, s.Description, s.ScriptType, s.Content, s.ComposeCmd, s.TimeoutSeconds, s.EnvVars, s.EnvID, s.WorkingDir)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	s.ID = id
+	if len(s.Files) > 0 {
+		_ = d.SaveScriptFiles(id, s.Files)
+	}
+	return id, nil
 }
 
 func (d *DB) UpdateScript(s *Script) error {
+	if s.ScriptType == "" {
+		s.ScriptType = "bash"
+	}
 	_, err := d.conn.Exec(`
-		UPDATE scripts SET name=?, description=?, content=?, timeout_seconds=?, env_vars=?, env_id=?, working_dir=?, updated_at=CURRENT_TIMESTAMP
+		UPDATE scripts SET name=?, description=?, script_type=?, content=?, compose_cmd=?, timeout_seconds=?, env_vars=?, env_id=?, working_dir=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?`,
-		s.Name, s.Description, s.Content, s.TimeoutSeconds, s.EnvVars, s.EnvID, s.WorkingDir, s.ID)
+		s.Name, s.Description, s.ScriptType, s.Content, s.ComposeCmd, s.TimeoutSeconds, s.EnvVars, s.EnvID, s.WorkingDir, s.ID)
+	if err != nil {
+		return err
+	}
+	if s.Files != nil {
+		_ = d.SaveScriptFiles(s.ID, s.Files)
+	}
+	return nil
+}
+
+func (d *DB) GetScriptFiles(scriptID int64) ([]ScriptFile, error) {
+	rows, err := d.conn.Query(`SELECT id, script_id, path, content, created_at, updated_at FROM script_files WHERE script_id = ? ORDER BY path ASC`, scriptID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []ScriptFile
+	for rows.Next() {
+		var f ScriptFile
+		if err := rows.Scan(&f.ID, &f.ScriptID, &f.Path, &f.Content, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	if files == nil {
+		files = []ScriptFile{}
+	}
+	return files, nil
+}
+
+func (d *DB) SaveScriptFiles(scriptID int64, files []ScriptFile) error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM script_files WHERE script_id = ?`, scriptID); err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO script_files(script_id, path, content) VALUES(?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, f := range files {
+		if f.Path == "" {
+			continue
+		}
+		if _, err := stmt.Exec(scriptID, f.Path, f.Content); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) DeleteScriptFile(scriptID int64, fileID int64) error {
+	_, err := d.conn.Exec(`DELETE FROM script_files WHERE script_id = ? AND id = ?`, scriptID, fileID)
 	return err
 }
 
 func (d *DB) DeleteScript(id int64) error {
+	_, _ = d.conn.Exec(`DELETE FROM script_files WHERE script_id=?`, id)
 	_, err := d.conn.Exec(`DELETE FROM scripts WHERE id=?`, id)
 	return err
 }

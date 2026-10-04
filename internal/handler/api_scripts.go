@@ -88,8 +88,27 @@ func runScriptDirectly(w http.ResponseWriter, r *http.Request, database *db.DB, 
 	envVars["SEH_SCRIPT_NAME"] = script.Name
 	envVars["SEH_TRIGGER_IP"] = clientIP
 
+	var filesToDeploy []executor.FileToDeploy
+	for _, f := range script.Files {
+		filesToDeploy = append(filesToDeploy, executor.FileToDeploy{
+			Path:    f.Path,
+			Content: f.Content,
+		})
+	}
+
 	go func() {
-		result := executor.RunWithPayload(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds, req.Payload)
+		opts := executor.ScriptOptions{
+			ScriptID:       script.ID,
+			ScriptType:     script.ScriptType,
+			Content:        script.Content,
+			ComposeCmd:     script.ComposeCmd,
+			WorkingDir:     script.WorkingDir,
+			EnvVars:        envVars,
+			TimeoutSeconds: script.TimeoutSeconds,
+			Payload:        req.Payload,
+			Files:          filesToDeploy,
+		}
+		result := executor.RunScript(opts)
 		exitCode := &result.ExitCode
 		_ = database.UpdateLog(logID, exitCode, result.Stdout, result.Stderr, result.DurationMs, result.Status)
 	}()
@@ -126,14 +145,22 @@ func getScript(w http.ResponseWriter, database *db.DB, id int64) {
 	writeOK(w, s)
 }
 
+type scriptFileRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 type scriptRequest struct {
-	Name           string `json:"name"`
-	Description    string `json:"description"`
-	Content        string `json:"content"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	EnvVars        string `json:"env_vars"`
-	EnvID          *int64 `json:"env_id"`
-	WorkingDir     string `json:"working_dir"`
+	Name           string              `json:"name"`
+	Description    string              `json:"description"`
+	ScriptType     string              `json:"script_type"` // "bash" or "docker_compose"
+	Content        string              `json:"content"`
+	ComposeCmd     string              `json:"compose_cmd"`
+	TimeoutSeconds int                 `json:"timeout_seconds"`
+	EnvVars        string              `json:"env_vars"`
+	EnvID          *int64              `json:"env_id"`
+	WorkingDir     string              `json:"working_dir"`
+	Files          []scriptFileRequest `json:"files"`
 }
 
 func createScript(w http.ResponseWriter, r *http.Request, database *db.DB) {
@@ -155,18 +182,41 @@ func createScript(w http.ResponseWriter, r *http.Request, database *db.DB) {
 	if req.WorkingDir == "" {
 		req.WorkingDir = "/tmp"
 	}
+	if req.ScriptType == "" {
+		req.ScriptType = "bash"
+	}
 	if strings.Contains(req.EnvVars, "<script") {
 		writeError(w, http.StatusBadRequest, "invalid env vars")
 		return
 	}
+
+	var dbFiles []db.ScriptFile
+	for _, f := range req.Files {
+		cleanPath := strings.TrimSpace(f.Path)
+		if cleanPath == "" {
+			continue
+		}
+		if _, err := executor.SafeRelPath("/tmp", cleanPath); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid file path: "+err.Error())
+			return
+		}
+		dbFiles = append(dbFiles, db.ScriptFile{
+			Path:    cleanPath,
+			Content: f.Content,
+		})
+	}
+
 	s := &db.Script{
 		Name:           req.Name,
 		Description:    req.Description,
+		ScriptType:     req.ScriptType,
 		Content:        req.Content,
+		ComposeCmd:     req.ComposeCmd,
 		TimeoutSeconds: req.TimeoutSeconds,
 		EnvVars:        req.EnvVars,
 		EnvID:          req.EnvID,
 		WorkingDir:     req.WorkingDir,
+		Files:          dbFiles,
 	}
 	id, err := database.CreateScript(s)
 	if err != nil {
@@ -191,6 +241,10 @@ func updateScript(w http.ResponseWriter, r *http.Request, database *db.DB, id in
 	if req.Name != "" {
 		existing.Name = req.Name
 	}
+	if req.ScriptType != "" {
+		existing.ScriptType = req.ScriptType
+	}
+	existing.ComposeCmd = req.ComposeCmd
 	existing.Description = req.Description
 	existing.Content = req.Content
 	if req.TimeoutSeconds > 0 {
@@ -203,6 +257,26 @@ func updateScript(w http.ResponseWriter, r *http.Request, database *db.DB, id in
 	if req.WorkingDir != "" {
 		existing.WorkingDir = req.WorkingDir
 	}
+
+	if req.Files != nil {
+		var dbFiles []db.ScriptFile
+		for _, f := range req.Files {
+			cleanPath := strings.TrimSpace(f.Path)
+			if cleanPath == "" {
+				continue
+			}
+			if _, err := executor.SafeRelPath("/tmp", cleanPath); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid file path: "+err.Error())
+				return
+			}
+			dbFiles = append(dbFiles, db.ScriptFile{
+				Path:    cleanPath,
+				Content: f.Content,
+			})
+		}
+		existing.Files = dbFiles
+	}
+
 	if err := database.UpdateScript(existing); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
