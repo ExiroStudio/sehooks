@@ -18,6 +18,7 @@ const api = {
 let state = {
   hooks: [],
   scripts: [],
+  environments: [],
   logs: [],
   currentPage: 'dashboard',
   autoRefreshInterval: null,
@@ -53,6 +54,7 @@ async function loadPage(page) {
     if (page === 'dashboard') await loadDashboard();
     if (page === 'hooks') await loadHooks();
     if (page === 'scripts') await loadScripts();
+    if (page === 'envs') await loadEnvironments();
     if (page === 'logs') await loadLogs();
     if (page === 'settings') await loadSettings();
   } catch (e) { toast(e.message, 'error'); }
@@ -102,14 +104,17 @@ document.getElementById('logout-btn').addEventListener('click', async () => {
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 async function loadDashboard() {
-  const [hooks, scripts, logs] = await Promise.all([
-    api.get('/api/hooks'), api.get('/api/scripts'), api.get('/api/logs?limit=10')
+  const [hooks, scripts, envs, logs] = await Promise.all([
+    api.get('/api/hooks'), api.get('/api/scripts'), api.get('/api/environments'), api.get('/api/logs?limit=10')
   ]);
   state.hooks = hooks || [];
   state.scripts = scripts || [];
+  state.environments = envs || [];
   state.logs = logs || [];
   document.getElementById('stat-hooks').textContent = state.hooks.length;
   document.getElementById('stat-scripts').textContent = state.scripts.length;
+  const envStat = document.getElementById('stat-envs');
+  if (envStat) envStat.textContent = state.environments.length;
   const success = state.logs.filter(l => l.status === 'success').length;
   const failed = state.logs.filter(l => l.status === 'failed' || l.status === 'timeout' || l.status === 'interrupted').length;
   document.getElementById('stat-success').textContent = success;
@@ -120,11 +125,12 @@ async function loadDashboard() {
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────
 async function loadHooks() {
-  const [hooks, scripts] = await Promise.all([
-    api.get('/api/hooks'), api.get('/api/scripts')
+  const [hooks, scripts, envs] = await Promise.all([
+    api.get('/api/hooks'), api.get('/api/scripts'), api.get('/api/environments')
   ]);
   state.hooks = hooks || [];
   state.scripts = scripts || [];
+  state.environments = envs || [];
   renderHooks();
 }
 
@@ -142,7 +148,7 @@ function renderHooks() {
     <div class="hook-card" id="hook-card-${h.id}">
       <div class="card-header-row">
         <div class="card-title">
-          <span class="badge-id" title="Click to copy ID" onclick="copyText('${h.id}', 'Hook ID #${h.id} copied!')">#${h.id}</span>
+          <span class="badge-id" title="Click to copy ID" onclick="copyText('${h.id}', 'Hook ID #${h.id} copied!', this)">#${h.id}</span>
           ${escHtml(h.name)}
         </div>
         <span class="badge ${h.enabled ? 'badge-success' : 'badge-muted'}">${h.enabled ? '● Active' : '○ Disabled'}</span>
@@ -151,17 +157,18 @@ function renderHooks() {
       <div class="card-meta">
         <span class="badge badge-accent">/${escHtml(h.slug)}</span>
         ${h.script_name ? `<span class="badge badge-muted">📄 ${escHtml(h.script_name)}</span>` : `<span class="badge badge-warning">⚠ No script</span>`}
+        ${h.env_name ? `<span class="badge badge-success">🔐 ${escHtml(h.env_name)}</span>` : ''}
       </div>
-      <div class="token-box">
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" title="${webhookUrl}">/webhook/${escHtml(h.secret_token)}</span>
-        <div class="token-actions">
-          <button class="copy-btn" title="Copy full Webhook URL" onclick="copyHookUrl('${escHtml(h.secret_token)}')">
+      <div class="token-box" title="Click to copy Webhook URL" onclick="copyHookUrl('${escHtml(h.secret_token)}', this)">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">/webhook/${escHtml(h.secret_token)}</span>
+        <div class="token-actions" onclick="event.stopPropagation()">
+          <button class="copy-btn" title="Copy full Webhook URL" onclick="copyHookUrl('${escHtml(h.secret_token)}', this)">
             <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M12.232 4.232a2.5 2.5 0 013.536 3.536l-1.225 1.224a.75.75 0 001.061 1.06l1.224-1.224a4 4 0 00-5.656-5.656l-3 3a4 4 0 00.225 5.865.75.75 0 00.977-1.138 2.5 2.5 0 01-.142-3.667l3-3z"/><path d="M11.603 7.963a.75.75 0 00-.977 1.138 2.5 2.5 0 01.142 3.667l-3 3a2.5 2.5 0 01-3.536-3.536l1.225-1.224a.75.75 0 00-1.061-1.06l-1.224 1.224a4 4 0 105.656 5.656l3-3a4 4 0 00-.225-5.865z"/></svg>
           </button>
-          <button class="copy-btn" title="Copy cURL command" onclick="copyCurlCmd('${escHtml(h.secret_token)}')">
+          <button class="copy-btn" title="Copy cURL command" onclick="copyCurlCmd('${escHtml(h.secret_token)}', this)">
             <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 3.293a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 01-1.414-1.414L7.586 12 5.293 9.707a1 1 0 010-1.414zM11 13a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/></svg>
           </button>
-          <button class="copy-btn" title="Copy Secret Token" onclick="copyText('${escHtml(h.secret_token)}', 'Secret Token copied!')">
+          <button class="copy-btn" title="Copy Secret Token" onclick="copyText('${escHtml(h.secret_token)}', 'Secret Token copied!', this)">
             <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z"/><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"/></svg>
           </button>
         </div>
@@ -182,6 +189,7 @@ function renderHooks() {
 function openHookModal(id) {
   const hook = id ? state.hooks.find(h => h.id === id) : null;
   const scriptOptions = state.scripts.map(s => `<option value="${s.id}" ${hook?.script_id == s.id ? 'selected' : ''}>${escHtml(s.name)}</option>`).join('');
+  const envOptions = state.environments.map(e => `<option value="${e.id}" ${hook?.env_id == e.id ? 'selected' : ''}>${escHtml(e.name)} (${e.variables?.length || 0} vars)</option>`).join('');
   openModal(hook ? 'Edit Hook' : 'New Hook', `
     <form id="hook-form">
       <div class="form-group">
@@ -200,6 +208,11 @@ function openHookModal(id) {
         </div>
       </div>
       <div class="form-group">
+        <label for="hk-env">Environment Profile (Optional)</label>
+        <select id="hk-env"><option value="">— None (Inherit from script) —</option>${envOptions}</select>
+        <div class="hint">Overrides the script's default environment profile if set.</div>
+      </div>
+      <div class="form-group">
         <label for="hk-desc">Description</label>
         <input id="hk-desc" type="text" placeholder="What does this hook do?" value="${escHtml(hook?.description || '')}" />
       </div>
@@ -216,10 +229,12 @@ function openHookModal(id) {
   document.getElementById('hook-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const scriptVal = document.getElementById('hk-script').value;
+    const envVal = document.getElementById('hk-env').value;
     const payload = {
       name: document.getElementById('hk-name').value,
       slug: document.getElementById('hk-slug').value || undefined,
       script_id: scriptVal ? parseInt(scriptVal) : null,
+      env_id: envVal ? parseInt(envVal) : null,
       description: document.getElementById('hk-desc').value,
       enabled: hook ? document.getElementById('hk-enabled').checked : true,
     };
@@ -269,8 +284,11 @@ document.getElementById('new-hook-btn').addEventListener('click', () => openHook
 
 // ─── Scripts ─────────────────────────────────────────────────────────────────
 async function loadScripts() {
-  const scripts = await api.get('/api/scripts');
+  const [scripts, envs] = await Promise.all([
+    api.get('/api/scripts'), api.get('/api/environments')
+  ]);
   state.scripts = scripts || [];
+  state.environments = envs || [];
   renderScripts();
 }
 
@@ -286,7 +304,7 @@ function renderScripts() {
     <div class="script-card">
       <div class="card-header-row">
         <div class="card-title">
-          <span class="badge-id" title="Click to copy ID" onclick="copyText('${s.id}', 'Script ID #${s.id} copied!')">#${s.id}</span>
+          <span class="badge-id" title="Click to copy ID" onclick="copyText('${s.id}', 'Script ID #${s.id} copied!', this)">#${s.id}</span>
           📄 ${escHtml(s.name)}
         </div>
       </div>
@@ -294,10 +312,11 @@ function renderScripts() {
       <div class="card-meta">
         <span class="badge badge-muted">⏱ ${s.timeout_seconds}s timeout</span>
         <span class="badge badge-muted">📁 ${escHtml(s.working_dir)}</span>
+        ${s.env_name ? `<span class="badge badge-success">🔐 ${escHtml(s.env_name)}</span>` : ''}
       </div>
       <div class="card-actions">
         <button class="btn btn-primary btn-sm" onclick="runScriptNow(${s.id}, '${escHtml(s.name)}')">▶ Run</button>
-        <button class="btn btn-ghost btn-sm" onclick="copyScriptContent(${s.id})">📋 Copy</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyScriptContent(${s.id}, this)">📋 Copy</button>
         <button class="btn btn-ghost btn-sm" onclick="openScriptModal(${s.id})">Edit</button>
         <button class="btn btn-danger btn-sm btn-icon-only" onclick="deleteScript(${s.id})" title="Delete">
           <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
@@ -308,6 +327,7 @@ function renderScripts() {
 
 function openScriptModal(id) {
   const s = id ? state.scripts.find(x => x.id === id) : null;
+  const envOptions = state.environments.map(e => `<option value="${e.id}" ${s?.env_id == e.id ? 'selected' : ''}>${escHtml(e.name)} (${e.variables?.length || 0} vars)</option>`).join('');
   openModal(s ? 'Edit Script' : 'New Script', `
     <form id="script-form">
       <div class="form-group">
@@ -321,7 +341,7 @@ function openScriptModal(id) {
       <div class="form-group">
         <label for="sc-content">Shell Script *</label>
         <textarea id="sc-content" placeholder="#!/bin/bash&#10;echo 'Hello from hook!'">${escHtml(s?.content || '')}</textarea>
-        <div class="hint">bash is used. set -euo pipefail is automatically prepended.</div>
+        <div class="hint">bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.</div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -334,9 +354,17 @@ function openScriptModal(id) {
         </div>
       </div>
       <div class="form-group">
-        <label for="sc-env">Environment Variables (JSON)</label>
+        <label for="sc-env-profile">Environment Profile (Optional)</label>
+        <select id="sc-env-profile"><option value="">— None —</option>${envOptions}</select>
+        <div class="hint">Select an environment profile to inject variables into execution & $SEH_ENV_FILE.</div>
+      </div>
+      <div class="form-group">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label for="sc-env" style="margin:0">Script-Specific Env Vars (JSON)</label>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="promptImportEnvToScriptJson()">📥 Import .env to JSON</button>
+        </div>
         <input id="sc-env" type="text" placeholder='{"MY_VAR": "value"}' value="${escHtml(s?.env_vars || '{}')}" />
-        <div class="hint">Keys must be alphanumeric + underscore only.</div>
+        <div class="hint">Keys must be alphanumeric + underscore only. Overrides profile variables.</div>
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
@@ -346,6 +374,7 @@ function openScriptModal(id) {
   `);
   document.getElementById('script-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const envProfileVal = document.getElementById('sc-env-profile').value;
     const payload = {
       name: document.getElementById('sc-name').value,
       description: document.getElementById('sc-desc').value,
@@ -353,6 +382,7 @@ function openScriptModal(id) {
       timeout_seconds: parseInt(document.getElementById('sc-timeout').value) || 30,
       working_dir: document.getElementById('sc-workdir').value || '/tmp',
       env_vars: document.getElementById('sc-env').value || '{}',
+      env_id: envProfileVal ? parseInt(envProfileVal) : null,
     };
     try {
       if (s) await api.put(`/api/scripts/${s.id}`, payload);
@@ -362,6 +392,255 @@ function openScriptModal(id) {
     } catch (err) { toast(err.message, 'error'); }
   });
 }
+
+function promptImportEnvToScriptJson() {
+  const raw = prompt('Paste your .env content to convert to JSON:');
+  if (!raw) return;
+  const items = parseDotEnv(raw);
+  const obj = {};
+  items.forEach(it => { obj[it.key] = it.value; });
+  document.getElementById('sc-env').value = JSON.stringify(obj);
+  toast(`Parsed ${items.length} variables into JSON`, 'success');
+}
+
+// ─── Environments ────────────────────────────────────────────────────────────
+async function loadEnvironments() {
+  const envs = await api.get('/api/environments');
+  state.environments = envs || [];
+  renderEnvironments();
+}
+
+function renderEnvironments() {
+  const el = document.getElementById('envs-list');
+  if (!el) return;
+  if (!state.environments.length) {
+    el.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <h3>No environments yet</h3><p>Create an environment profile to store variables & secrets</p>
+      <button class="btn btn-primary" onclick="openEnvModal()">Create Environment</button>
+    </div>`; return;
+  }
+  el.innerHTML = state.environments.map(e => {
+    const vars = e.variables || [];
+    const secretCount = vars.filter(v => v.is_secret).length;
+    const pills = vars.slice(0, 8).map(v => `
+      <span class="var-pill ${v.is_secret ? 'is-secret' : ''}" title="${v.is_secret ? 'Secret variable (encrypted)' : 'Standard variable'}">
+        ${v.is_secret ? '🔒 ' : ''}${escHtml(v.key)}
+      </span>
+    `).join('');
+    const morePills = vars.length > 8 ? `<span class="var-pill">+${vars.length - 8} more</span>` : '';
+
+    return `
+    <div class="env-card" id="env-card-${e.id}">
+      <div class="card-header-row">
+        <div class="card-title">
+          <span class="badge-id" title="Click to copy ID" onclick="copyText('${e.id}', 'Env ID #${e.id} copied!', this)">#${e.id}</span>
+          🔐 ${escHtml(e.name)}
+        </div>
+        <span class="badge badge-accent">${vars.length} vars${secretCount ? ` (${secretCount} secret)` : ''}</span>
+      </div>
+      <div class="card-desc">${escHtml(e.description || 'No description')}</div>
+      <div class="var-pills">
+        ${pills || '<span style="color:var(--text-muted);font-size:12px">No variables defined</span>'}
+        ${morePills}
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-primary btn-sm" onclick="openEnvModal(${e.id})">Edit Variables</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportEnvModal(${e.id})">📋 View .env</button>
+        <button class="btn btn-danger btn-sm btn-icon-only" onclick="deleteEnv(${e.id})" title="Delete">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openEnvModal(id) {
+  const env = id ? state.environments.find(x => x.id === id) : null;
+  const initialVars = env?.variables && env.variables.length ? env.variables : [{ key: '', value: '', is_secret: false }];
+
+  openModal(env ? 'Edit Environment' : 'New Environment', `
+    <form id="env-form">
+      <div class="form-group">
+        <label for="env-name">Environment Name *</label>
+        <input id="env-name" type="text" placeholder="e.g. Backend Production" value="${escHtml(env?.name || '')}" required />
+      </div>
+      <div class="form-group">
+        <label for="env-desc">Description</label>
+        <input id="env-desc" type="text" placeholder="What is this environment used for?" value="${escHtml(env?.description || '')}" />
+      </div>
+
+      <div class="section-header" style="margin-top:20px;margin-bottom:8px">
+        <label style="margin:0;font-size:13px;font-weight:600">Environment Variables</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="showImportEnvTextarea()">📥 Import .env</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow()">+ Add Variable</button>
+        </div>
+      </div>
+
+      <!-- Import .env textarea toggle (initially hidden) -->
+      <div id="env-import-box" class="hidden" style="margin-bottom:14px;background:var(--bg-elevated);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border)">
+        <label style="margin-bottom:4px;font-size:12px">Paste .env file contents:</label>
+        <textarea id="env-import-text" class="raw-env-textarea" placeholder="PORT=8080&#10;DATABASE_URL=postgres://user:pass@localhost:5432/db&#10;JWT_SECRET=supersecret"></textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('env-import-box').classList.add('hidden')">Cancel</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="applyImportEnvText()">Parse & Add</button>
+        </div>
+      </div>
+
+      <table class="kv-table">
+        <thead>
+          <tr>
+            <th style="width:35%">Key</th>
+            <th style="width:45%">Value</th>
+            <th style="width:15%">Secret?</th>
+            <th style="width:5%"></th>
+          </tr>
+        </thead>
+        <tbody id="env-table-body">
+          ${initialVars.map((v, idx) => renderEnvRowHtml(v.key, v.value, v.is_secret, idx)).join('')}
+        </tbody>
+      </table>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">${env ? 'Save Changes' : 'Create Environment'}</button>
+      </div>
+    </form>
+  `);
+
+  document.getElementById('env-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const rows = document.querySelectorAll('#env-table-body tr.kv-row');
+    const variables = [];
+    for (const row of rows) {
+      const key = row.querySelector('.kv-key').value.trim();
+      const value = row.querySelector('.kv-val').value;
+      const is_secret = row.querySelector('.kv-secret').checked;
+      if (key) {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+          toast(`Invalid variable key: "${key}". Must use letters, numbers, and underscore only.`, 'error');
+          return;
+        }
+        variables.push({ key, value, is_secret });
+      }
+    }
+
+    const payload = {
+      name: document.getElementById('env-name').value.trim(),
+      description: document.getElementById('env-desc').value.trim(),
+      variables,
+    };
+
+    try {
+      if (env) await api.put(`/api/environments/${env.id}`, payload);
+      else await api.post('/api/environments', payload);
+      closeModal();
+      toast(env ? 'Environment updated' : 'Environment created', 'success');
+      await loadEnvironments();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+}
+
+function renderEnvRowHtml(key = '', val = '', isSecret = false, idx = 0) {
+  return `
+    <tr class="kv-row" id="kv-row-${idx}">
+      <td>
+        <input type="text" class="kv-key" placeholder="e.g. PORT" value="${escHtml(key)}" required />
+      </td>
+      <td>
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="${isSecret ? 'password' : 'text'}" class="kv-val" placeholder="value" value="${escHtml(val)}" />
+          <button type="button" class="secret-toggle-btn" title="Toggle visibility" onclick="togglePasswordVisibility(this)">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg>
+          </button>
+        </div>
+      </td>
+      <td style="text-align:center">
+        <label class="secret-check-label">
+          <input type="checkbox" class="kv-secret" ${isSecret ? 'checked' : ''} onchange="onSecretCheckboxChange(this)" />
+          <span>Lock</span>
+        </label>
+      </td>
+      <td>
+        <button type="button" class="copy-btn" title="Delete variable" onclick="this.closest('tr').remove()" style="color:var(--danger)">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
+function addEnvRow(key = '', val = '', isSecret = false) {
+  const tbody = document.getElementById('env-table-body');
+  if (!tbody) return;
+  const idx = Date.now() + Math.floor(Math.random() * 1000);
+  const temp = document.createElement('tbody');
+  temp.innerHTML = renderEnvRowHtml(key, val, isSecret, idx);
+  tbody.appendChild(temp.firstElementChild);
+}
+
+function togglePasswordVisibility(btn) {
+  const input = btn.previousElementSibling;
+  if (!input) return;
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function onSecretCheckboxChange(chk) {
+  const valInput = chk.closest('tr').querySelector('.kv-val');
+  if (valInput) {
+    valInput.type = chk.checked ? 'password' : 'text';
+  }
+}
+
+function showImportEnvTextarea() {
+  const box = document.getElementById('env-import-box');
+  if (box) box.classList.toggle('hidden');
+}
+
+function applyImportEnvText() {
+  const text = document.getElementById('env-import-text').value;
+  if (!text.trim()) return;
+  const items = parseDotEnv(text);
+  if (!items.length) {
+    toast('No valid variables found in pasted content', 'error');
+    return;
+  }
+  for (const item of items) {
+    addEnvRow(item.key, item.value, item.is_secret);
+  }
+  document.getElementById('env-import-text').value = '';
+  document.getElementById('env-import-box').classList.add('hidden');
+  toast(`Imported ${items.length} variables into form`, 'success');
+}
+
+function exportEnvModal(id) {
+  const env = state.environments.find(x => x.id === id);
+  if (!env) return;
+  const content = formatDotEnv(env.variables || []);
+  openModal(`Export: ${env.name} (.env)`, `
+    <div>
+      <p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px">
+        Standard <code>.env</code> file format. You can copy this or let SEHooks auto-import via <code>seh_import_env</code> during deployment.
+      </p>
+      <textarea id="export-env-text" class="raw-env-textarea" readonly style="width:100%">${escHtml(content)}</textarea>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeModal()">Close</button>
+        <button type="button" class="btn btn-primary" onclick="copyText(document.getElementById('export-env-text').value, 'Environment file copied to clipboard!', this)">📋 Copy .env Content</button>
+      </div>
+    </div>
+  `);
+}
+
+async function deleteEnv(id) {
+  if (!confirm('Delete this environment? Any scripts using it will no longer receive these variables.')) return;
+  try {
+    await api.delete(`/api/environments/${id}`);
+    toast('Environment deleted', 'success');
+    await loadEnvironments();
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+document.getElementById('new-env-btn')?.addEventListener('click', () => openEnvModal());
 
 async function runScriptNow(id, name) {
   if (!confirm(`Run script "${name}" directly now?`)) return;
@@ -591,33 +870,109 @@ document.querySelectorAll('.nav-item').forEach(el => {
 function escHtml(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function copyText(text, label = 'Copied!') {
+async function copyText(text, label = 'Copied!', btn = null) {
   if (!text) return;
-  navigator.clipboard.writeText(text).then(() => toast(label, 'success')).catch(() => toast('Copy failed', 'error'));
+  let ok = false;
+
+  // 1. Try modern clipboard API if in secure context
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch (_) {
+      ok = false;
+    }
+  }
+
+  // 2. Fallback to hidden textarea with execCommand (supports HTTP remote VPS & all browsers)
+  if (!ok) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '-9999px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (_) {
+      ok = false;
+    }
+  }
+
+  if (ok) {
+    toast(label, 'success');
+    if (btn && btn.nodeType === Node.ELEMENT_NODE) {
+      btn.classList.add('copied');
+      const originalSvg = btn.innerHTML;
+      btn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>`;
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        btn.innerHTML = originalSvg;
+      }, 1500);
+    }
+  } else {
+    toast('Gagal menyalin ke clipboard (Copy failed)', 'error');
+  }
 }
-function copyHookUrl(token) {
+
+function copyHookUrl(token, btn = null) {
   const url = `${window.location.origin}/webhook/${token}`;
-  copyText(url, 'Webhook URL copied!');
+  copyText(url, 'Webhook URL copied!', btn);
 }
-function copyCurlCmd(token) {
+function copyCurlCmd(token, btn = null) {
   const url = `${window.location.origin}/webhook/${token}`;
-  copyText(`curl -X POST ${url}`, 'cURL command copied!');
+  copyText(`curl -X POST ${url}`, 'cURL command copied!', btn);
 }
-function copyScriptContent(id) {
+function copyScriptContent(id, btn = null) {
   const s = state.scripts.find(x => x.id === id);
-  if (s) copyText(s.content, 'Script code copied!');
+  if (s) copyText(s.content, 'Script code copied!', btn);
 }
-function copyLogPayload(id) {
+function copyLogPayload(id, btn = null) {
   const l = state.logs.find(x => x.id === id);
-  if (l) copyText(l.payload, 'Payload copied!');
+  if (l) copyText(l.payload, 'Payload copied!', btn);
 }
-function copyLogStdout(id) {
+function copyLogStdout(id, btn = null) {
   const l = state.logs.find(x => x.id === id);
-  if (l) copyText(l.stdout, 'Stdout copied!');
+  if (l) copyText(l.stdout, 'Stdout copied!', btn);
 }
-function copyLogStderr(id) {
+function copyLogStderr(id, btn = null) {
   const l = state.logs.find(x => x.id === id);
-  if (l) copyText(l.stderr, 'Stderr copied!');
+  if (l) copyText(l.stderr, 'Stderr copied!', btn);
+}
+
+function parseDotEnv(text) {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  const items = [];
+  for (let line of lines) {
+    line = line.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.substring(7).trim();
+    const eqIdx = line.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const key = line.substring(0, eqIdx).trim();
+    let val = line.substring(eqIdx + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    val = val.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    const isSecret = /SECRET|KEY|PASS|TOKEN|CREDENTIAL|PRIVATE|AUTH|DATABASE_URL/i.test(key);
+    items.push({ key, value: val, is_secret: isSecret });
+  }
+  return items;
+}
+
+function formatDotEnv(items) {
+  if (!items || !items.length) return '';
+  return items.map(item => {
+    const escaped = (item.value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    return `${item.key}="${escaped}"`;
+  }).join('\n');
 }
 function formatDate(dateStr) {
   if (!dateStr) return '—';

@@ -20,7 +20,7 @@ func main() {
 	cfg := config.Load()
 
 	// Init database
-	database, err := db.New(cfg.DatabasePath)
+	database, err := db.New(cfg.DatabasePath, cfg.SecretKey)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
@@ -32,6 +32,10 @@ func main() {
 	mux.HandleFunc("/api/auth/login", handler.LoginHandler(cfg))
 	mux.HandleFunc("/api/auth/logout", handler.LogoutHandler())
 	mux.HandleFunc("/api/auth/me", handler.MeHandler(cfg))
+
+	// ── Environments API
+	mux.HandleFunc("/api/environments", handler.EnvironmentsHandler(database, cfg))
+	mux.HandleFunc("/api/environments/", handler.EnvironmentHandler(database, cfg))
 
 	// ── Hooks API
 	mux.HandleFunc("/api/hooks", handler.HooksHandler(database, cfg))

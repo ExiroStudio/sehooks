@@ -2,6 +2,23 @@ package db
 
 import "time"
 
+// EnvVarItem represents a key-value environment variable item
+type EnvVarItem struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	IsSecret bool   `json:"is_secret"`
+}
+
+// Environment represents a stored collection of environment variables
+type Environment struct {
+	ID          int64        `json:"id"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Variables   []EnvVarItem `json:"variables"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+}
+
 // Hook represents a webhook endpoint definition
 type Hook struct {
 	ID          int64     `json:"id"`
@@ -9,12 +26,14 @@ type Hook struct {
 	Slug        string    `json:"slug"`
 	SecretToken string    `json:"secret_token"`
 	ScriptID    *int64    `json:"script_id"`
+	EnvID       *int64    `json:"env_id"`
 	Description string    `json:"description"`
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	// Joined
 	ScriptName string `json:"script_name,omitempty"`
+	EnvName    string `json:"env_name,omitempty"`
 }
 
 // Script represents a stored shell script
@@ -25,9 +44,12 @@ type Script struct {
 	Content        string    `json:"content"`
 	TimeoutSeconds int       `json:"timeout_seconds"`
 	EnvVars        string    `json:"env_vars"` // JSON string: {"KEY":"VAL"}
+	EnvID          *int64    `json:"env_id"`
 	WorkingDir     string    `json:"working_dir"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	// Joined
+	EnvName string `json:"env_name,omitempty"`
 }
 
 // ExecutionLog represents a single hook execution record

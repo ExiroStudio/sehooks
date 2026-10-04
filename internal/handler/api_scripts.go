@@ -83,10 +83,7 @@ func runScriptDirectly(w http.ResponseWriter, r *http.Request, database *db.DB, 
 		return
 	}
 
-	envVars, err := executor.ParseEnvVars(script.EnvVars)
-	if err != nil {
-		envVars = map[string]string{}
-	}
+	envVars := ResolveExecutionEnv(database, nil, script)
 	envVars["SEH_SCRIPT_ID"] = fmt.Sprintf("%d", script.ID)
 	envVars["SEH_SCRIPT_NAME"] = script.Name
 	envVars["SEH_TRIGGER_IP"] = clientIP
@@ -135,6 +132,7 @@ type scriptRequest struct {
 	Content        string `json:"content"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	EnvVars        string `json:"env_vars"`
+	EnvID          *int64 `json:"env_id"`
 	WorkingDir     string `json:"working_dir"`
 }
 
@@ -167,6 +165,7 @@ func createScript(w http.ResponseWriter, r *http.Request, database *db.DB) {
 		Content:        req.Content,
 		TimeoutSeconds: req.TimeoutSeconds,
 		EnvVars:        req.EnvVars,
+		EnvID:          req.EnvID,
 		WorkingDir:     req.WorkingDir,
 	}
 	id, err := database.CreateScript(s)
@@ -200,6 +199,7 @@ func updateScript(w http.ResponseWriter, r *http.Request, database *db.DB, id in
 	if req.EnvVars != "" {
 		existing.EnvVars = req.EnvVars
 	}
+	existing.EnvID = req.EnvID
 	if req.WorkingDir != "" {
 		existing.WorkingDir = req.WorkingDir
 	}

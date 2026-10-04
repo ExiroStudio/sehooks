@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,4 +191,101 @@ func TestConcurrentSessions(t *testing.T) {
 		<-done
 	}
 }
+
+func TestEnvironmentsAPIAndExecution(t *testing.T) {
+	database, dbPath := setupTestDB(t)
+	defer os.Remove(dbPath)
+	defer database.Close()
+
+	cfg := &config.Config{
+		AdminPassword: "admin",
+	}
+
+	token := "admin-token-env"
+	SetSession(token, time.Now().Add(1*time.Hour))
+
+	// 1. Create environment via POST /api/environments
+	envBody, _ := json.Marshal(map[string]any{
+		"name":        "Test Backend Env",
+		"description": "Backend variables for testing",
+		"variables": []map[string]any{
+			{"key": "APP_PORT", "value": "5000", "is_secret": false},
+			{"key": "SECRET_KEY", "value": "my-very-secret-token", "is_secret": true},
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/api/environments", bytes.NewBuffer(envBody))
+	postReq.Header.Set("Authorization", "Bearer "+token)
+	postW := httptest.NewRecorder()
+	EnvironmentsHandler(database, cfg).ServeHTTP(postW, postReq)
+
+	if postW.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", postW.Code, postW.Body.String())
+	}
+
+	var postResp struct {
+		Data db.Environment `json:"data"`
+	}
+	if err := json.Unmarshal(postW.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("unmarshal post resp: %v", err)
+	}
+	envID := postResp.Data.ID
+
+	// 2. Create script linked to this environment
+	scriptID, err := database.CreateScript(&db.Script{
+		Name:           "Script with Env",
+		Content:        `echo "PORT=$APP_PORT"; echo "SECRET=$SECRET_KEY"; seh_import_env; cat .env`,
+		TimeoutSeconds: 5,
+		EnvVars:        `{"OVERRIDE_VAR":"123"}`,
+		EnvID:          &envID,
+		WorkingDir:     "/tmp",
+	})
+	if err != nil {
+		t.Fatalf("create script: %v", err)
+	}
+
+	// 3. Create hook linked to this script
+	hookID, err := database.CreateHook(&db.Hook{
+		Name:        "Hook with Env",
+		Slug:        "hook-with-env",
+		SecretToken: "token-env-hook",
+		ScriptID:    &scriptID,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("create hook: %v", err)
+	}
+	_ = hookID
+
+	// 4. Trigger webhook
+	hookReq := httptest.NewRequest(http.MethodPost, "/webhook/token-env-hook", nil)
+	hookW := httptest.NewRecorder()
+	WebhookHandler(database).ServeHTTP(hookW, hookReq)
+
+	if hookW.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted, got %d: %s", hookW.Code, hookW.Body.String())
+	}
+
+	time.Sleep(1 * time.Second)
+
+	logs, err := database.ListLogs(1, 0)
+	if err != nil || len(logs) == 0 {
+		t.Fatalf("expected log entry, got %v", err)
+	}
+
+	lastLog := logs[0]
+	if lastLog.Status != "success" {
+		t.Fatalf("expected success, got %s (stderr: %s)", lastLog.Status, lastLog.Stderr)
+	}
+
+	if !strings.Contains(lastLog.Stdout, "PORT=5000") {
+		t.Fatalf("expected stdout to contain PORT=5000, got: %s", lastLog.Stdout)
+	}
+	if !strings.Contains(lastLog.Stdout, "SECRET=my-very-secret-token") {
+		t.Fatalf("expected stdout to contain SECRET=my-very-secret-token, got: %s", lastLog.Stdout)
+	}
+	if !strings.Contains(lastLog.Stdout, `APP_PORT="5000"`) {
+		t.Fatalf("expected stdout to contain imported .env file content, got: %s", lastLog.Stdout)
+	}
+}
+
 

@@ -153,10 +153,7 @@ func triggerHook(w http.ResponseWriter, r *http.Request, database *db.DB, id int
 		return
 	}
 
-	envVars, err := executor.ParseEnvVars(script.EnvVars)
-	if err != nil {
-		envVars = map[string]string{}
-	}
+	envVars := ResolveExecutionEnv(database, hook, script)
 	envVars["SEH_HOOK_ID"] = fmt.Sprintf("%d", hook.ID)
 	envVars["SEH_HOOK_NAME"] = hook.Name
 	envVars["SEH_HOOK_SLUG"] = hook.Slug
@@ -204,6 +201,7 @@ type hookRequest struct {
 	Name        string `json:"name"`
 	Slug        string `json:"slug"`
 	ScriptID    *int64 `json:"script_id"`
+	EnvID       *int64 `json:"env_id"`
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
 }
@@ -232,6 +230,7 @@ func createHook(w http.ResponseWriter, r *http.Request, database *db.DB) {
 		Slug:        req.Slug,
 		SecretToken: generateToken(),
 		ScriptID:    req.ScriptID,
+		EnvID:       req.EnvID,
 		Description: req.Description,
 		Enabled:     true,
 	}
@@ -266,6 +265,7 @@ func updateHook(w http.ResponseWriter, r *http.Request, database *db.DB, id int6
 		existing.Slug = req.Slug
 	}
 	existing.ScriptID = req.ScriptID
+	existing.EnvID = req.EnvID
 	existing.Description = req.Description
 	existing.Enabled = req.Enabled
 	if err := database.UpdateHook(existing); err != nil {

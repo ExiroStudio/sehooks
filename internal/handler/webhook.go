@@ -88,12 +88,8 @@ func WebhookHandler(database *db.DB) http.HandlerFunc {
 			return
 		}
 
-		// Parse env vars
-		envVars, err := executor.ParseEnvVars(script.EnvVars)
-		if err != nil {
-			log.Printf("parse env vars error: %v", err)
-			envVars = map[string]string{}
-		}
+		// Resolve env vars from linked environment and script
+		envVars := ResolveExecutionEnv(database, hook, script)
 
 		// Inject hook metadata as env vars
 		envVars["SEH_HOOK_ID"] = fmt.Sprintf("%d", hook.ID)

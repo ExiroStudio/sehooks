@@ -12,6 +12,7 @@ A lightweight, self-contained webhook management and script execution server wit
 - ⚡ **Pure Go & Embedded UI**: Single static binary with zero external runtime dependencies.
 - 🗄️ **Zero-Config SQLite**: Built-in SQLite database engine with automatic schema migrations.
 - 🔒 **Authenticated Dashboard**: Clean web SPA to manage scripts, hooks, and inspect stdout/stderr logs.
+- 🔐 **Encrypted Environments**: AES-256-GCM encrypted `.env` storage with automated backend deployment helpers.
 - 🐚 **Safe Shell Execution**: Asynchronous script execution with timeout control, isolated env vars, and exit codes.
 - 🐳 **Docker-Ready**: Multi-arch images (`linux/amd64`, `linux/arm64`) with `bash`, `curl`, `git`, `jq`, `docker-cli`, and `openssh-client` included.
 
@@ -81,7 +82,7 @@ docker compose up -d
 | `SEH_PORT` | Port for web UI and webhook API | `8080` |
 | `SEH_DB_PATH` | Path to the SQLite database file | `/data/hooks.db` *(Docker)* / `./hooks.db` *(local)* |
 | `SEH_ADMIN_PASSWORD` | Password for the admin dashboard | `admin` |
-| `SEH_SECRET_KEY` | Secret key used for session signing | `change-me-in-production` |
+| `SEH_SECRET_KEY` | Secret key used for session signing and AES-256-GCM encryption of environment secrets | `change-me-in-production` |
 
 ---
 
@@ -131,6 +132,54 @@ environment:
   - DOCKER_REGISTRY=registry.example.com # optional, defaults to Docker Hub
   - DOCKER_USERNAME=myuser
   - DOCKER_PASSWORD=mypassword
+```
+
+---
+
+## 🔐 Environment Variables & Automated Backend Deployments
+
+sehooks provides a built-in **Environments Manager** designed for automated CI/CD and backend deployments. You can create environment profiles (e.g. `Production Backend`, `Staging`, `Worker`) and link them to **Scripts** or **Hooks**.
+
+### 🛡️ Security Features
+- **AES-256-GCM Encryption**: Variables marked as `Secret` are encrypted at-rest in the SQLite database using a 256-bit key derived via SHA-256 from `SEH_SECRET_KEY`.
+- **Restricted Permissions**: When a script runs, the temporary environment file is created with strict `0600` permissions (`-rw-------`), accessible only by the current process user.
+- **Auto-Cleanup**: The temporary environment file is automatically shredded/deleted immediately when script execution finishes.
+
+### 📋 Managing Environments in the Dashboard
+1. Navigate to **Environments** in the sidebar.
+2. Click **+ New Environment** and enter a name (e.g., `Prod Backend`).
+3. Add variables using the interactive **Key-Value Editor**, or click **Import .env** to paste a raw `.env` file directly.
+4. Toggle the 🔒 icon on any row to mark sensitive values (such as `DB_PASSWORD`, `API_KEY`, `JWT_SECRET`) as encrypted secrets.
+5. In **Scripts** or **Hooks**, select your environment profile from the **Environment Profile** dropdown.
+
+### 🚀 Using in Deployment Scripts
+
+When a script with an attached environment runs, sehooks provides:
+1. **Direct Shell Variables**: Each key is exported into the shell environment (`$DB_HOST`, `$PORT`, etc.).
+2. **`$SEH_ENV_FILE`**: An environment variable pointing to the temporary `.env` file.
+3. **`seh_import_env [target_path]`**: A built-in shell helper function that safely copies the environment file into your target project directory (default: `./.env`) with `chmod 0600`.
+
+#### Backend Deployment Example:
+```bash
+#!/bin/bash
+set -e
+
+cd /var/www/my-api-server
+
+# Pull latest code
+git pull origin main
+
+# Safely copy and sync .env for the backend service (defaults to ./.env)
+seh_import_env
+
+# Or specify a custom target path:
+# seh_import_env config/.env.production
+
+# Restart Docker containers or systemd service
+docker compose down
+docker compose up -d --build
+
+echo "Deployment completed successfully!"
 ```
 
 ---
