@@ -199,3 +199,28 @@ func TestRunScriptDockerComposePreparation(t *testing.T) {
 		t.Fatalf("expected nginx.conf content, got %s", string(nginxBytes))
 	}
 }
+
+func TestIsDockerCompose(t *testing.T) {
+	cases := []struct {
+		scriptType string
+		content    string
+		expected   bool
+	}{
+		{"docker_compose", "anything", true},
+		{"docker-compose", "anything", true},
+		{"compose", "anything", true},
+		{"DOCKER_COMPOSE", "anything", true},
+		{"bash", "echo hello", false},
+		{"", "echo hello", false},
+		{"bash", "services:\n  app:\n    image: nginx", true}, // Heuristic fallback
+		{"", "version: '3.8'\nservices:\n", true},             // Heuristic fallback
+		{"bash", "#!/bin/bash\necho services:", false},         // Shebang overrides
+	}
+
+	for i, c := range cases {
+		got := IsDockerCompose(c.scriptType, c.content)
+		if got != c.expected {
+			t.Errorf("case %d (%s, %q): expected %v, got %v", i, c.scriptType, c.content, c.expected, got)
+		}
+	}
+}

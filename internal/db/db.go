@@ -402,7 +402,7 @@ func (d *DB) RegenToken(id int64, token string) error {
 
 func (d *DB) ListScripts() ([]Script, error) {
 	rows, err := d.conn.Query(`
-		SELECT s.id, s.name, s.description, COALESCE(s.script_type, 'bash'), s.content, COALESCE(s.compose_cmd, ''), s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
+		SELECT s.id, s.name, s.description, COALESCE(NULLIF(s.script_type, ''), 'bash'), s.content, COALESCE(s.compose_cmd, ''), s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
 		FROM scripts s
 		LEFT JOIN environments e ON e.id = s.env_id
 		ORDER BY s.created_at DESC`)
@@ -433,7 +433,7 @@ func (d *DB) ListScripts() ([]Script, error) {
 
 func (d *DB) GetScriptByID(id int64) (*Script, error) {
 	row := d.conn.QueryRow(`
-		SELECT s.id, s.name, s.description, COALESCE(s.script_type, 'bash'), s.content, COALESCE(s.compose_cmd, ''), s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
+		SELECT s.id, s.name, s.description, COALESCE(NULLIF(s.script_type, ''), 'bash'), s.content, COALESCE(s.compose_cmd, ''), s.timeout_seconds, s.env_vars, s.env_id, s.working_dir, s.created_at, s.updated_at, COALESCE(e.name, '') as env_name
 		FROM scripts s
 		LEFT JOIN environments e ON e.id = s.env_id
 		WHERE s.id=?`, id)

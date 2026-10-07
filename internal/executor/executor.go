@@ -106,6 +106,30 @@ func WriteDotEnvFile(workingDir string, envVars map[string]string) error {
 	return os.WriteFile(targetPath, buf.Bytes(), 0600)
 }
 
+// IsDockerCompose returns true if scriptType or content indicates Docker Compose
+func IsDockerCompose(scriptType, content string) bool {
+	st := strings.ToLower(strings.TrimSpace(scriptType))
+	if st == "docker_compose" || st == "docker-compose" || st == "compose" {
+		return true
+	}
+	// Fallback heuristic: check if content looks like a docker-compose YAML file
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "#!") {
+		return false // Explicit bash shebang
+	}
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "services:") || strings.HasPrefix(line, "version:") {
+			return true
+		}
+		break
+	}
+	return false
+}
+
 // RunScript executes a script with full support for bash/docker-compose and additional files
 func RunScript(opts ScriptOptions) Result {
 	workDir := strings.TrimSpace(opts.WorkingDir)
@@ -117,7 +141,7 @@ func RunScript(opts ScriptOptions) Result {
 		}
 	}
 
-	if opts.ScriptType == "docker_compose" {
+	if IsDockerCompose(opts.ScriptType, opts.Content) {
 		if err := os.MkdirAll(workDir, 0755); err != nil {
 			return Result{Status: "failed", Error: err, Stderr: err.Error(), ExitCode: -1}
 		}

@@ -603,13 +603,29 @@ function openScriptModal(id) {
 
   renderModalFiles();
 
+  const contentEl = document.getElementById('sc-content');
+  if (contentEl) {
+    contentEl.addEventListener('input', (e) => {
+      const val = e.target.value.trim();
+      if ((val.startsWith('services:') || val.startsWith('version:')) && document.getElementById('sc-type').value !== 'docker_compose') {
+        setScriptType('docker_compose');
+      }
+    });
+  }
+
   document.getElementById('script-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const envProfileVal = document.getElementById('sc-env-profile').value;
+    let scriptType = document.getElementById('sc-type').value;
+    const contentVal = (document.getElementById('sc-content').value || '').trim();
+    if (scriptType !== 'docker_compose' && (contentVal.startsWith('services:') || contentVal.startsWith('version:'))) {
+      scriptType = 'docker_compose';
+    }
+
     const payload = {
       name: document.getElementById('sc-name').value,
       description: document.getElementById('sc-desc').value,
-      script_type: document.getElementById('sc-type').value,
+      script_type: scriptType,
       content: document.getElementById('sc-content').value,
       compose_cmd: document.getElementById('sc-compose-cmd')?.value || '',
       timeout_seconds: parseInt(document.getElementById('sc-timeout').value) || 30,
