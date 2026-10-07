@@ -440,17 +440,25 @@ function setScriptType(type) {
   const hint = document.getElementById('sc-content-hint');
   const helperBtn = document.getElementById('sc-compose-helper-btn');
   const composeGroup = document.getElementById('sc-compose-cmd-group');
+  const workdirHint = document.getElementById('sc-workdir-hint');
+  const workdirInput = document.getElementById('sc-workdir');
 
   if (type === 'docker_compose') {
     if (label) label.innerText = 'docker-compose.yml *';
     if (hint) hint.innerHTML = 'Docker Compose YAML format. Environment variables from your profile are automatically injected into working_dir/.env.';
     if (helperBtn) helperBtn.style.display = 'block';
     if (composeGroup) composeGroup.style.display = 'block';
+    if (workdirHint) workdirHint.innerHTML = '⚠️ <strong>Docker Compose:</strong> Gunakan path direktori host (misal <code>/var/www/my-app</code>) yang di-mount ke container SEHooks agar file bind mount (seperti nginx.conf) dapat dibaca.';
+    if (workdirInput && (workdirInput.value === '/tmp' || !workdirInput.value)) {
+      workdirInput.placeholder = '/var/www/my-app';
+    }
   } else {
     if (label) label.innerText = 'Shell Script *';
     if (hint) hint.innerHTML = 'bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.';
     if (helperBtn) helperBtn.style.display = 'none';
     if (composeGroup) composeGroup.style.display = 'none';
+    if (workdirHint) workdirHint.innerHTML = 'Directory where script executes. Defaults to <code>/tmp</code>.';
+    if (workdirInput) workdirInput.placeholder = '/tmp';
   }
 }
 
@@ -555,8 +563,8 @@ function openScriptModal(id) {
         </div>
         <div class="form-group">
           <label for="sc-workdir">Working Directory</label>
-          <input id="sc-workdir" type="text" placeholder="/tmp" value="${escHtml(s?.working_dir || '/tmp')}" />
-          <div class="hint" style="font-size:11px">Files and compose projects will be placed here.</div>
+          <input id="sc-workdir" type="text" placeholder="${isCompose ? '/var/www/my-app' : '/tmp'}" value="${escHtml(s?.working_dir || (isCompose ? '' : '/tmp'))}" />
+          <div id="sc-workdir-hint" class="hint" style="font-size:11px">${isCompose ? '⚠️ <strong>Docker Compose:</strong> Gunakan direktori host (misal <code>/var/www/my-app</code>) yang di-mount bersama SEHooks.' : 'Directory where script executes. Defaults to <code>/tmp</code>.'}</div>
         </div>
       </div>
 

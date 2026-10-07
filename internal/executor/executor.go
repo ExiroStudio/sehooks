@@ -77,6 +77,9 @@ func WriteAdditionalFiles(workingDir string, files []FileToDeploy) error {
 		if err != nil {
 			return err
 		}
+		if info, err := os.Stat(target); err == nil && info.IsDir() {
+			_ = os.RemoveAll(target)
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return fmt.Errorf("create dir for %s: %w", f.Path, err)
 		}
@@ -146,6 +149,9 @@ func RunScript(opts ScriptOptions) Result {
 			return Result{Status: "failed", Error: err, Stderr: err.Error(), ExitCode: -1}
 		}
 		composePath := filepath.Join(workDir, "docker-compose.yml")
+		if info, err := os.Stat(composePath); err == nil && info.IsDir() {
+			_ = os.RemoveAll(composePath)
+		}
 		if err := os.WriteFile(composePath, []byte(opts.Content), 0644); err != nil {
 			return Result{Status: "failed", Error: fmt.Errorf("write docker-compose.yml: %w", err), Stderr: err.Error(), ExitCode: -1}
 		}
