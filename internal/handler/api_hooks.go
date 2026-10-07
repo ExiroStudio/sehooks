@@ -159,8 +159,27 @@ func triggerHook(w http.ResponseWriter, r *http.Request, database *db.DB, id int
 	envVars["SEH_HOOK_SLUG"] = hook.Slug
 	envVars["SEH_TRIGGER_IP"] = clientIP
 
+	var filesToDeploy []executor.FileToDeploy
+	for _, f := range script.Files {
+		filesToDeploy = append(filesToDeploy, executor.FileToDeploy{
+			Path:    f.Path,
+			Content: f.Content,
+		})
+	}
+
 	go func() {
-		result := executor.RunWithPayload(script.Content, script.WorkingDir, envVars, script.TimeoutSeconds, req.Payload)
+		opts := executor.ScriptOptions{
+			ScriptID:       script.ID,
+			ScriptType:     script.ScriptType,
+			Content:        script.Content,
+			ComposeCmd:     script.ComposeCmd,
+			WorkingDir:     script.WorkingDir,
+			EnvVars:        envVars,
+			TimeoutSeconds: script.TimeoutSeconds,
+			Payload:        req.Payload,
+			Files:          filesToDeploy,
+		}
+		result := executor.RunScript(opts)
 		exitCode := &result.ExitCode
 		_ = database.UpdateLog(logID, exitCode, result.Stdout, result.Stderr, result.DurationMs, result.Status)
 	}()

@@ -374,4 +374,80 @@ func TestDockerComposeAndAdditionalFilesAPI(t *testing.T) {
 	}
 }
 
+func TestTriggerHookWithDockerCompose(t *testing.T) {
+	database, dbPath := setupTestDB(t)
+	defer os.Remove(dbPath)
+	defer database.Close()
+
+	cfg := &config.Config{
+		AdminPassword: "testpassword",
+		SecretKey:     "test-secret-key-32-bytes-long!!",
+	}
+
+	workDir, err := os.MkdirTemp("", "seh-trigger-compose-*")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	scriptID, err := database.CreateScript(&db.Script{
+		Name:           "Compose Script",
+		ScriptType:     "docker_compose",
+		Content:        "services:\n  app:\n    image: alpine\n",
+		ComposeCmd:     "cat docker-compose.yml; echo '---'; cat extra.txt",
+		WorkingDir:     workDir,
+		TimeoutSeconds: 5,
+		Files: []db.ScriptFile{
+			{Path: "extra.txt", Content: "hello from extra file"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create script error: %v", err)
+	}
+
+	hookID, err := database.CreateHook(&db.Hook{
+		Name:        "Compose Hook",
+		Slug:        "compose-hook",
+		SecretToken: "secrettoken123",
+		ScriptID:    &scriptID,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("create hook error: %v", err)
+	}
+
+	token := "test-session-trigger"
+	SetSession(token, time.Now().Add(1*time.Hour))
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/hooks/%d/trigger", hookID), strings.NewReader(`{"payload":"test"}`))
+	req.URL.Path = fmt.Sprintf("/api/hooks/%d/trigger", hookID)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	HookHandler(database, cfg).ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 Accepted, got %d: %s", w.Code, w.Body.String())
+	}
+
+	time.Sleep(1 * time.Second)
+
+	logs, err := database.ListLogs(1, 0)
+	if err != nil || len(logs) == 0 {
+		t.Fatalf("expected log entry, got %v", err)
+	}
+
+	lastLog := logs[0]
+	if lastLog.Status != "success" {
+		t.Fatalf("expected success, got %s (stderr: %s)", lastLog.Status, lastLog.Stderr)
+	}
+	if !strings.Contains(lastLog.Stdout, "services:") {
+		t.Fatalf("expected stdout to contain services:, got %s", lastLog.Stdout)
+	}
+	if !strings.Contains(lastLog.Stdout, "hello from extra file") {
+		t.Fatalf("expected stdout to contain extra.txt content, got %s", lastLog.Stdout)
+	}
+}
+
+
 
