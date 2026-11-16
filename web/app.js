@@ -333,7 +333,110 @@ function renderScripts() {
 
 let modalScriptFiles = [];
 let modalEditingFileIndex = -1;
+let modalActiveTab = 'main'; // 'main' or integer index
+let modalMainContent = '';
 
+// ─── YAML Formatter & Validator ──────────────────────────────────────────────
+function formatYaml(yamlStr) {
+  if (!yamlStr || !yamlStr.trim()) {
+    return { ok: true, formatted: yamlStr, warning: null };
+  }
+
+  const lines = yamlStr.split('\n');
+  const cleaned = lines.map(l => l.replace(/\t/g, '  ').replace(/\s+$/, ''));
+
+  // Detect 4-space indent pattern
+  const indents = [];
+  cleaned.forEach(l => {
+    const s = l.trim();
+    if (!s || s.startsWith('#')) return;
+    const leading = l.length - l.trimStart().length;
+    if (leading > 0) indents.push(leading);
+  });
+  const isAllMultiplesOf4 = indents.length > 0 && indents.every(i => i % 4 === 0);
+
+  const formattedLines = [];
+  let inBlockScalar = false;
+  let blockScalarIndent = 0;
+  let syntaxWarning = null;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    let line = cleaned[i];
+    const stripped = line.trim();
+
+    if (!stripped) {
+      if (formattedLines.length && formattedLines[formattedLines.length - 1] !== '') {
+        formattedLines.push('');
+      }
+      continue;
+    }
+
+    let leadingSpaces = line.length - line.trimStart().length;
+
+    if (inBlockScalar) {
+      if (leadingSpaces > blockScalarIndent) {
+        formattedLines.push(line);
+        continue;
+      } else {
+        inBlockScalar = false;
+      }
+    }
+
+    if (/(\||>)[-+]?$/.test(stripped)) {
+      inBlockScalar = true;
+      blockScalarIndent = leadingSpaces;
+    }
+
+    if (isAllMultiplesOf4) {
+      leadingSpaces = Math.floor(leadingSpaces / 4) * 2;
+      line = ' '.repeat(leadingSpaces) + stripped;
+    }
+
+    // Format key: value (if missing space after colon and not a URL like :// or quote)
+    const kvMatch = line.match(/^(\s*(?:-\s*)?[a-zA-Z0-9_\.\-]+):([^\s\n#].*)$/);
+    if (kvMatch && !kvMatch[2].startsWith('//')) {
+      line = `${kvMatch[1]}: ${kvMatch[2]}`;
+    }
+
+    // Format list item: -val -> - val
+    const listMatch = line.match(/^(\s*)-([^\s\-\n].*)$/);
+    if (listMatch) {
+      line = `${listMatch[1]}- ${listMatch[2]}`;
+    }
+
+    const singleQuotes = (stripped.match(/'/g) || []).length;
+    const doubleQuotes = (stripped.match(/"/g) || []).length;
+    if ((singleQuotes % 2 !== 0 && !stripped.startsWith('#')) || (doubleQuotes % 2 !== 0 && !stripped.startsWith('#'))) {
+      syntaxWarning = `Unbalanced quotes on line ${i + 1}`;
+    }
+
+    formattedLines.push(line);
+  }
+
+  const result = formattedLines.join('\n').trim() + '\n';
+  return { ok: true, formatted: result, warning: syntaxWarning };
+}
+
+function validateYamlQuick(content) {
+  if (!content || !content.trim()) return { valid: true };
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.includes('\t')) {
+      return { valid: false, error: `Tab character on line ${i + 1}` };
+    }
+    const stripped = line.trim();
+    if (!stripped || stripped.startsWith('#')) continue;
+    const sq = (stripped.match(/'/g) || []).length;
+    const dq = (stripped.match(/"/g) || []).length;
+    if (sq % 2 !== 0 || dq % 2 !== 0) {
+      return { valid: false, error: `Unbalanced quotes on line ${i + 1}` };
+    }
+  }
+  return { valid: true };
+}
+
+// ─── Additional Files & Independent Editor Logic ─────────────────────────────
 function renderModalFiles() {
   const container = document.getElementById('files-list-container');
   if (!container) return;
@@ -342,15 +445,15 @@ function renderModalFiles() {
     return;
   }
   container.innerHTML = modalScriptFiles.map((f, i) => `
-    <div class="file-row-item">
-      <div class="file-row-path">
+    <div class="file-row-item ${modalActiveTab === i ? 'active' : ''}">
+      <div class="file-row-path" style="cursor:pointer" onclick="switchEditorTab(${i})" title="Open in editor">
         <span>📄</span>
         <strong>${escHtml(f.path)}</strong>
         <span class="file-row-meta">(${f.content.length} chars)</span>
       </div>
       <div class="file-row-actions">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="editModalFile(${i})">Edit</button>
-        <button type="button" class="btn btn-danger btn-sm" onclick="removeModalFile(${i})">Remove</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="switchEditorTab(${i})" title="Open in spacious editor">Edit</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="removeModalFile(${i})" title="Remove">Remove</button>
       </div>
     </div>
   `).join('');
@@ -368,8 +471,8 @@ function showAddFileForm(index = -1) {
     pathInput.value = '';
     contentInput.value = '';
   }
-  form.classList.remove('hidden');
-  pathInput.focus();
+  if (form) form.classList.remove('hidden');
+  if (pathInput) pathInput.focus();
 }
 
 function hideAddFileForm() {
@@ -381,8 +484,8 @@ function hideAddFileForm() {
 function saveModalFile() {
   const pathInput = document.getElementById('new-file-path');
   const contentInput = document.getElementById('new-file-content');
-  const path = (pathInput.value || '').trim();
-  const content = contentInput.value || '';
+  const path = (pathInput?.value || '').trim();
+  const content = contentInput?.value || '';
 
   if (!path) {
     toast('File path / filename is required', 'error');
@@ -396,28 +499,257 @@ function saveModalFile() {
   if (modalEditingFileIndex >= 0 && modalEditingFileIndex < modalScriptFiles.length) {
     modalScriptFiles[modalEditingFileIndex] = { path, content };
     toast(`File "${path}" updated`, 'success');
+    switchEditorTab(modalEditingFileIndex);
   } else {
-    if (modalScriptFiles.some(f => f.path === path)) {
-      toast(`File "${path}" already exists in this script`, 'error');
-      return;
+    const existingIdx = modalScriptFiles.findIndex(f => f.path === path);
+    if (existingIdx !== -1) {
+      modalScriptFiles[existingIdx] = { path, content };
+      toast(`File "${path}" updated with new content`, 'success');
+      switchEditorTab(existingIdx);
+    } else {
+      modalScriptFiles.push({ path, content });
+      toast(`File "${path}" added`, 'success');
+      switchEditorTab(modalScriptFiles.length - 1);
     }
-    modalScriptFiles.push({ path, content });
-    toast(`File "${path}" added`, 'success');
   }
   hideAddFileForm();
   renderModalFiles();
+  renderEditorTabs();
 }
 
 function editModalFile(index) {
-  showAddFileForm(index);
+  switchEditorTab(index);
 }
 
 function removeModalFile(index) {
   if (index >= 0 && index < modalScriptFiles.length) {
     const removed = modalScriptFiles.splice(index, 1);
     toast(`Removed ${removed[0]?.path}`, 'info');
+    if (modalActiveTab === index) {
+      modalActiveTab = 'main';
+    } else if (typeof modalActiveTab === 'number' && modalActiveTab > index) {
+      modalActiveTab--;
+    }
     renderModalFiles();
+    renderEditorTabs();
+    switchEditorTab(modalActiveTab);
   }
+}
+
+function setEditorViewMode(mode) {
+  const form = document.getElementById('script-form');
+  if (!form) return;
+  form.classList.remove('view-mode-split', 'view-mode-editor', 'view-mode-settings');
+  form.classList.add(`view-mode-${mode}`);
+
+  document.querySelectorAll('.btn-view-mode').forEach(btn => btn.classList.remove('active'));
+  const activeBtn = document.getElementById(`btn-mode-${mode}`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  const expandBtn = document.getElementById('btn-editor-expand');
+  if (expandBtn) {
+    expandBtn.title = mode === 'editor' ? 'Restore Split View' : 'Maximize Editor';
+  }
+}
+
+function toggleEditorMaximize() {
+  const form = document.getElementById('script-form');
+  if (!form) return;
+  if (form.classList.contains('view-mode-editor')) {
+    setEditorViewMode('split');
+  } else {
+    setEditorViewMode('editor');
+  }
+}
+
+function syncCurrentEditorToState() {
+  const textarea = document.getElementById('sc-content');
+  if (!textarea) return;
+  if (modalActiveTab === 'main') {
+    modalMainContent = textarea.value;
+  } else if (typeof modalActiveTab === 'number' && modalScriptFiles[modalActiveTab]) {
+    modalScriptFiles[modalActiveTab].content = textarea.value;
+  }
+}
+
+function switchEditorTab(target) {
+  syncCurrentEditorToState();
+  modalActiveTab = target;
+  const textarea = document.getElementById('sc-content');
+  if (textarea) {
+    if (target === 'main') {
+      textarea.value = modalMainContent;
+      const isCompose = document.getElementById('sc-type')?.value === 'docker_compose';
+      textarea.placeholder = isCompose
+        ? 'services:\n  app:\n    image: nginx:alpine'
+        : '#!/bin/bash\necho "Hello from hook!"';
+    } else if (typeof target === 'number' && modalScriptFiles[target]) {
+      textarea.value = modalScriptFiles[target].content;
+      textarea.placeholder = `# Content of ${modalScriptFiles[target].path}...`;
+    }
+  }
+  renderEditorTabs();
+  renderModalFiles();
+  updateEditorLineNumbers();
+  updateEditorStatus();
+}
+
+function closeEditorTab(index) {
+  if (index >= 0 && index < modalScriptFiles.length) {
+    const filename = modalScriptFiles[index].path;
+    if (!confirm(`Remove "${filename}" from additional files?`)) return;
+    modalScriptFiles.splice(index, 1);
+    toast(`Removed ${filename}`, 'info');
+    if (modalActiveTab === index) {
+      modalActiveTab = 'main';
+    } else if (typeof modalActiveTab === 'number' && modalActiveTab > index) {
+      modalActiveTab--;
+    }
+    renderModalFiles();
+    renderEditorTabs();
+    switchEditorTab(modalActiveTab);
+  }
+}
+
+function renderEditorTabs() {
+  const container = document.getElementById('editor-tabs-container');
+  if (!container) return;
+
+  const scriptType = document.getElementById('sc-type')?.value || 'bash';
+  const isCompose = scriptType === 'docker_compose';
+  const mainTabName = isCompose ? '🐳 docker-compose.yml' : '🐧 Shell Script';
+
+  let html = `
+    <button type="button" class="editor-tab ${modalActiveTab === 'main' ? 'active' : ''}" onclick="switchEditorTab('main')">
+      ${mainTabName}
+    </button>
+  `;
+
+  modalScriptFiles.forEach((f, i) => {
+    const isYaml = f.path.endsWith('.yml') || f.path.endsWith('.yaml');
+    const icon = isYaml ? '🐳' : '📄';
+    html += `
+      <button type="button" class="editor-tab ${modalActiveTab === i ? 'active' : ''}" onclick="switchEditorTab(${i})" title="${escHtml(f.path)}">
+        <span>${icon} ${escHtml(f.path)}</span>
+        <span class="editor-tab-close" onclick="event.stopPropagation(); closeEditorTab(${i})" title="Remove file">✕</span>
+      </button>
+    `;
+  });
+
+  html += `
+    <button type="button" class="editor-tab-add" onclick="showAddFileForm()" title="Add / Paste Additional File">
+      + File
+    </button>
+  `;
+
+  container.innerHTML = html;
+}
+
+function updateEditorLineNumbers() {
+  const textarea = document.getElementById('sc-content');
+  const gutter = document.getElementById('editor-gutter');
+  if (!textarea || !gutter) return;
+
+  const lineCount = (textarea.value.match(/\n/g) || []).length + 1;
+  let nums = '';
+  for (let i = 1; i <= lineCount; i++) {
+    nums += i + '\n';
+  }
+  gutter.innerText = nums;
+  gutter.scrollTop = textarea.scrollTop;
+}
+
+function isCurrentTabYaml() {
+  if (modalActiveTab === 'main') {
+    return document.getElementById('sc-type')?.value === 'docker_compose';
+  }
+  if (typeof modalActiveTab === 'number' && modalScriptFiles[modalActiveTab]) {
+    const p = modalScriptFiles[modalActiveTab].path.toLowerCase();
+    return p.endsWith('.yml') || p.endsWith('.yaml');
+  }
+  return false;
+}
+
+function updateEditorStatus() {
+  const textarea = document.getElementById('sc-content');
+  if (!textarea) return;
+
+  const text = textarea.value;
+  const lineCount = (text.match(/\n/g) || []).length + 1;
+  const charCount = text.length;
+
+  const selStart = textarea.selectionStart || 0;
+  const textBefore = text.substring(0, selStart);
+  const currentLine = (textBefore.match(/\n/g) || []).length + 1;
+  const lastNl = textBefore.lastIndexOf('\n');
+  const currentCol = selStart - (lastNl === -1 ? 0 : lastNl + 1) + 1;
+
+  const posEl = document.getElementById('editor-pos-info');
+  if (posEl) posEl.innerText = `Ln ${currentLine}, Col ${currentCol}`;
+
+  const statEl = document.getElementById('editor-stat-info');
+  if (statEl) statEl.innerText = `${lineCount} line${lineCount !== 1 ? 's' : ''} • ${charCount} chars`;
+
+  const isYaml = isCurrentTabYaml();
+  const langBadge = document.getElementById('editor-lang-badge');
+  const yamlBtn = document.getElementById('btn-format-yaml');
+  const yamlStatus = document.getElementById('editor-yaml-status');
+  const templateBtn = document.getElementById('btn-compose-template');
+
+  if (templateBtn) {
+    templateBtn.style.display = (modalActiveTab === 'main' && document.getElementById('sc-type')?.value === 'docker_compose') ? 'inline-flex' : 'none';
+  }
+
+  if (isYaml) {
+    if (langBadge) {
+      langBadge.innerText = 'YAML (2 spaces)';
+      langBadge.className = 'badge badge-compose';
+    }
+    if (yamlBtn) yamlBtn.style.display = 'inline-flex';
+
+    const validation = validateYamlQuick(text);
+    if (yamlStatus) {
+      yamlStatus.classList.remove('hidden');
+      if (validation.valid) {
+        yamlStatus.innerText = '✓ Valid YAML';
+        yamlStatus.className = 'yaml-status-ok';
+      } else {
+        yamlStatus.innerText = `⚠️ ${validation.error}`;
+        yamlStatus.className = 'yaml-status-err';
+      }
+    }
+  } else {
+    const isBash = modalActiveTab === 'main';
+    if (langBadge) {
+      langBadge.innerText = isBash ? 'Bash' : 'Plain Text';
+      langBadge.className = 'badge badge-muted';
+    }
+    if (yamlBtn) yamlBtn.style.display = 'none';
+    if (yamlStatus) yamlStatus.classList.add('hidden');
+  }
+}
+
+function formatActiveEditorYaml() {
+  const textarea = document.getElementById('sc-content');
+  if (!textarea) return;
+
+  const res = formatYaml(textarea.value);
+  textarea.value = res.formatted;
+  syncCurrentEditorToState();
+  updateEditorLineNumbers();
+  updateEditorStatus();
+
+  if (res.warning) {
+    toast(`Formatted with notice: ${res.warning}`, 'warning');
+  } else {
+    toast('✓ YAML auto-formatted (standard 2 spaces)', 'success');
+  }
+}
+
+function copyActiveEditorContent(btn) {
+  const textarea = document.getElementById('sc-content');
+  if (!textarea) return;
+  copyText(textarea.value, 'Code copied to clipboard!', btn);
 }
 
 function setScriptType(type) {
@@ -436,30 +768,24 @@ function setScriptType(type) {
     }
   }
 
-  const label = document.getElementById('sc-content-label');
-  const hint = document.getElementById('sc-content-hint');
-  const helperBtn = document.getElementById('sc-compose-helper-btn');
   const composeGroup = document.getElementById('sc-compose-cmd-group');
   const workdirHint = document.getElementById('sc-workdir-hint');
   const workdirInput = document.getElementById('sc-workdir');
 
   if (type === 'docker_compose') {
-    if (label) label.innerText = 'docker-compose.yml *';
-    if (hint) hint.innerHTML = 'Docker Compose YAML format. Environment variables from your profile are automatically injected into working_dir/.env.';
-    if (helperBtn) helperBtn.style.display = 'block';
     if (composeGroup) composeGroup.style.display = 'block';
     if (workdirHint) workdirHint.innerHTML = '⚠️ <strong>Docker Compose:</strong> Gunakan path direktori host (misal <code>/var/www/my-app</code>) yang di-mount ke container SEHooks agar file bind mount (seperti nginx.conf) dapat dibaca.';
     if (workdirInput && (workdirInput.value === '/tmp' || !workdirInput.value)) {
       workdirInput.placeholder = '/var/www/my-app';
     }
   } else {
-    if (label) label.innerText = 'Shell Script *';
-    if (hint) hint.innerHTML = 'bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.';
-    if (helperBtn) helperBtn.style.display = 'none';
     if (composeGroup) composeGroup.style.display = 'none';
     if (workdirHint) workdirHint.innerHTML = 'Directory where script executes. Defaults to <code>/tmp</code>.';
     if (workdirInput) workdirInput.placeholder = '/tmp';
   }
+
+  renderEditorTabs();
+  updateEditorStatus();
 }
 
 function setComposeCmd(cmd) {
@@ -468,8 +794,6 @@ function setComposeCmd(cmd) {
 }
 
 function insertSampleCompose() {
-  const content = document.getElementById('sc-content');
-  if (!content) return;
   const sample = `services:
   web:
     image: nginx:alpine
@@ -478,14 +802,16 @@ function insertSampleCompose() {
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped`;
-  if (content.value.trim() && !confirm('Replace current content with sample docker-compose.yml?')) {
+  if (modalMainContent.trim() && !confirm('Replace current content with sample docker-compose.yml?')) {
     return;
   }
-  content.value = sample;
-  if (!modalScriptFiles.some(f => f.path === 'nginx.conf')) {
-    modalScriptFiles.push({
-      path: 'nginx.conf',
-      content: `events { worker_connections 1024; }
+  modalMainContent = sample;
+  if (modalActiveTab === 'main') {
+    const textarea = document.getElementById('sc-content');
+    if (textarea) textarea.value = sample;
+  }
+
+  const sampleNginx = `events { worker_connections 1024; }
 http {
   server {
     listen 80;
@@ -493,139 +819,293 @@ http {
       return 200 "Hello from Docker Compose via SEHooks!\\n";
     }
   }
-}`
-    });
-    renderModalFiles();
+}`;
+  const existingNginx = modalScriptFiles.find(f => f.path === 'nginx.conf');
+  if (existingNginx) {
+    existingNginx.content = sampleNginx;
+    toast('Updated sample nginx.conf in Additional Files', 'info');
+  } else {
+    modalScriptFiles.push({ path: 'nginx.conf', content: sampleNginx });
     toast('Added sample nginx.conf to Additional Files', 'info');
   }
+
+  renderModalFiles();
+  renderEditorTabs();
+  if (typeof modalActiveTab === 'number' && modalScriptFiles[modalActiveTab]?.path === 'nginx.conf') {
+    const textarea = document.getElementById('sc-content');
+    if (textarea) textarea.value = sampleNginx;
+  }
+  updateEditorLineNumbers();
+  updateEditorStatus();
 }
 
 function openScriptModal(id) {
   const s = id ? state.scripts.find(x => x.id === id) : null;
   const currentType = s?.script_type || 'bash';
+  const isCompose = currentType === 'docker_compose';
   modalScriptFiles = (s?.files || []).map(f => ({ path: f.path, content: f.content }));
+  modalActiveTab = 'main';
+  modalMainContent = s?.content || '';
 
   const envOptions = state.environments.map(e => `<option value="${e.id}" ${s?.env_id == e.id ? 'selected' : ''}>${escHtml(e.name)} (${e.variables?.length || 0} vars)</option>`).join('');
 
+  // Setup header view modes
+  const headerActions = document.getElementById('modal-header-actions');
+  if (headerActions) {
+    headerActions.classList.remove('hidden');
+    headerActions.innerHTML = `
+      <div class="modal-view-modes">
+        <button type="button" class="btn-view-mode active" id="btn-mode-split" onclick="setEditorViewMode('split')" title="Side-by-side view">◫ Split</button>
+        <button type="button" class="btn-view-mode" id="btn-mode-editor" onclick="setEditorViewMode('editor')" title="Spacious Editor Only">⛶ Editor</button>
+        <button type="button" class="btn-view-mode" id="btn-mode-settings" onclick="setEditorViewMode('settings')" title="Settings Only">⚙️ Settings</button>
+      </div>
+    `;
+  }
+
   openModal(s ? 'Edit Script' : 'New Script', `
-    <form id="script-form">
-      <div class="form-group">
-        <label for="sc-name">Name *</label>
-        <input id="sc-name" type="text" placeholder="e.g. Deploy Web App" value="${escHtml(s?.name || '')}" required />
-      </div>
-      <div class="form-group">
-        <label for="sc-desc">Description</label>
-        <input id="sc-desc" type="text" placeholder="What does this script do?" value="${escHtml(s?.description || '')}" />
-      </div>
-
-      <div class="form-group">
-        <label>Execution Method *</label>
-        <div class="segmented-control">
-          <button type="button" id="btn-type-bash" class="segment-btn ${currentType === 'bash' ? 'active' : ''}" onclick="setScriptType('bash')">
-            🐧 Bash Script
-          </button>
-          <button type="button" id="btn-type-compose" class="segment-btn ${currentType === 'docker_compose' ? 'active' : ''}" onclick="setScriptType('docker_compose')">
-            🐳 Docker Compose
-          </button>
-        </div>
-        <input type="hidden" id="sc-type" value="${currentType}" />
-      </div>
-
-      <div class="form-group">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <label id="sc-content-label" for="sc-content" style="margin:0">${currentType === 'docker_compose' ? 'docker-compose.yml *' : 'Shell Script *'}</label>
-          <div id="sc-compose-helper-btn" style="${currentType === 'docker_compose' ? '' : 'display:none'}">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="insertSampleCompose()">📄 Insert Template</button>
-          </div>
-        </div>
-        <textarea id="sc-content" class="raw-env-textarea" placeholder="${currentType === 'docker_compose' ? 'services:\n  app:\n    image: nginx:alpine' : '#!/bin/bash\necho \'Hello from hook!\''}">${escHtml(s?.content || '')}</textarea>
-        <div id="sc-content-hint" class="hint">${currentType === 'docker_compose' ? 'Docker Compose YAML format. Environment variables from your profile are automatically injected into working_dir/.env.' : 'bash is used. <code>seh_import_env [path]</code> helper is automatically available to import $SEH_ENV_FILE into .env.'}</div>
-      </div>
-
-      <div id="sc-compose-cmd-group" class="form-group" style="${currentType === 'docker_compose' ? '' : 'display:none'}">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <label for="sc-compose-cmd" style="margin:0">Compose Command *</label>
-          <div class="quick-presets">
-            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose up -d --build --remove-orphans')">Build & Up</button>
-            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose pull && docker compose up -d --remove-orphans')">Pull & Up</button>
-            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose restart')">Restart</button>
-            <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose down')">Down</button>
-          </div>
-        </div>
-        <textarea id="sc-compose-cmd" style="min-height:54px;font-family:var(--mono);font-size:12.5px" placeholder="docker compose up -d --build --remove-orphans">${escHtml(s?.compose_cmd || 'docker compose up -d --build --remove-orphans')}</textarea>
-        <div class="hint">Custom compose commands to execute. Multi-line bash commands are supported.</div>
-      </div>
-
-      <div class="form-row">
+    <form id="script-form" class="script-editor-layout view-mode-split">
+      <!-- Left Column: Settings Popup Form -->
+      <div class="script-settings-pane" id="script-settings-pane">
         <div class="form-group">
-          <label for="sc-timeout">Timeout (seconds)</label>
-          <input id="sc-timeout" type="number" min="1" max="3600" value="${s?.timeout_seconds || 30}" />
+          <label for="sc-name">Name *</label>
+          <input id="sc-name" type="text" placeholder="e.g. Deploy Web App" value="${escHtml(s?.name || '')}" required />
         </div>
         <div class="form-group">
-          <label for="sc-workdir">Working Directory</label>
-          <input id="sc-workdir" type="text" placeholder="${isCompose ? '/var/www/my-app' : '/tmp'}" value="${escHtml(s?.working_dir || (isCompose ? '' : '/tmp'))}" />
-          <div id="sc-workdir-hint" class="hint" style="font-size:11px">${isCompose ? '⚠️ <strong>Docker Compose:</strong> Gunakan direktori host (misal <code>/var/www/my-app</code>) yang di-mount bersama SEHooks.' : 'Directory where script executes. Defaults to <code>/tmp</code>.'}</div>
+          <label for="sc-desc">Description</label>
+          <input id="sc-desc" type="text" placeholder="What does this script do?" value="${escHtml(s?.description || '')}" />
         </div>
-      </div>
 
-      <div class="form-group" style="border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; background: rgba(255,255,255,0.015);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div>
-            <label style="margin:0;font-weight:600">📎 Additional Files</label>
-            <div style="font-size:11.5px;color:var(--text-secondary)">Extra config files deployed to working directory (e.g. <code>nginx.conf</code>, <code>Dockerfile</code>, <code>conf.d/app.conf</code>)</div>
+        <div class="form-group">
+          <label>Execution Method *</label>
+          <div class="segmented-control">
+            <button type="button" id="btn-type-bash" class="segment-btn ${!isCompose ? 'active' : ''}" onclick="setScriptType('bash')">
+              🐧 Bash Script
+            </button>
+            <button type="button" id="btn-type-compose" class="segment-btn ${isCompose ? 'active' : ''}" onclick="setScriptType('docker_compose')">
+              🐳 Docker Compose
+            </button>
           </div>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="showAddFileForm()">+ Add File</button>
+          <input type="hidden" id="sc-type" value="${currentType}" />
         </div>
 
-        <div id="add-file-form" class="hidden" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">
-          <div style="display:flex;gap:8px;margin-bottom:8px;">
-            <input type="text" id="new-file-path" placeholder="Relative path (e.g. nginx.conf or conf.d/default.conf)" style="font-family:var(--mono);font-size:12px;flex:1;" />
-            <button type="button" class="btn btn-primary btn-sm" onclick="saveModalFile()">Done</button>
-            <button type="button" class="btn btn-ghost btn-sm" onclick="hideAddFileForm()">Cancel</button>
+        <div id="sc-compose-cmd-group" class="form-group" style="${isCompose ? '' : 'display:none'}">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label for="sc-compose-cmd" style="margin:0">Compose Command *</label>
+            <div class="quick-presets">
+              <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose up -d --build --remove-orphans')">Build & Up</button>
+              <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose pull && docker compose up -d --remove-orphans')">Pull & Up</button>
+              <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose restart')">Restart</button>
+              <button type="button" class="btn-preset" onclick="setComposeCmd('docker compose down')">Down</button>
+            </div>
           </div>
-          <textarea id="new-file-content" class="raw-env-textarea" style="min-height:120px;font-size:12px" placeholder="# Enter file content here..."></textarea>
+          <textarea id="sc-compose-cmd" style="min-height:54px;font-family:var(--mono);font-size:12px" placeholder="docker compose up -d --build --remove-orphans">${escHtml(s?.compose_cmd || 'docker compose up -d --build --remove-orphans')}</textarea>
+          <div class="hint">Custom compose commands to execute. Multi-line bash commands are supported.</div>
         </div>
 
-        <div id="files-list-container"></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="sc-timeout">Timeout (seconds)</label>
+            <input id="sc-timeout" type="number" min="1" max="3600" value="${s?.timeout_seconds || 30}" />
+          </div>
+          <div class="form-group">
+            <label for="sc-workdir">Working Directory</label>
+            <input id="sc-workdir" type="text" placeholder="${isCompose ? '/var/www/my-app' : '/tmp'}" value="${escHtml(s?.working_dir || (isCompose ? '' : '/tmp'))}" />
+            <div id="sc-workdir-hint" class="hint" style="font-size:11px">${isCompose ? '⚠️ <strong>Docker Compose:</strong> Gunakan path direktori host (misal <code>/var/www/my-app</code>) yang di-mount bersama SEHooks.' : 'Directory where script executes. Defaults to <code>/tmp</code>.'}</div>
+          </div>
+        </div>
+
+        <div class="form-group additional-files-box">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div>
+              <label style="margin:0;font-weight:600">📎 Additional Files</label>
+              <div style="font-size:11px;color:var(--text-secondary)">Extra config files deployed to working directory (e.g. <code>nginx.conf</code>, <code>Dockerfile</code>)</div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="showAddFileForm()">+ Add File</button>
+          </div>
+
+          <div id="add-file-form" class="hidden add-file-form-box">
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+              <input type="text" id="new-file-path" placeholder="Relative path (e.g. nginx.conf or conf.d/default.conf)" style="font-family:var(--mono);font-size:12px;flex:1;" />
+              <button type="button" class="btn btn-primary btn-sm" onclick="saveModalFile()">Save</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="hideAddFileForm()">Cancel</button>
+            </div>
+            <textarea id="new-file-content" class="raw-env-textarea" style="min-height:90px;font-size:12px" placeholder="# Enter or paste file content here..."></textarea>
+          </div>
+
+          <div id="files-list-container"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="sc-env-profile">Environment Profile (Optional)</label>
+          <select id="sc-env-profile"><option value="">— None —</option>${envOptions}</select>
+          <div class="hint">Select an environment profile to inject variables into execution & $SEH_ENV_FILE / .env.</div>
+        </div>
+        <div class="form-group">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label for="sc-env" style="margin:0">Script-Specific Env Vars (JSON)</label>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="promptImportEnvToScriptJson()">📥 Import .env</button>
+          </div>
+          <input id="sc-env" type="text" placeholder='{"MY_VAR": "value"}' value="${escHtml(s?.env_vars || '{}')}" />
+          <div class="hint">Overrides profile variables.</div>
+        </div>
+        <div class="form-actions settings-pane-actions">
+          <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">${s ? 'Save Changes' : 'Create Script'}</button>
+        </div>
       </div>
 
-      <div class="form-group">
-        <label for="sc-env-profile">Environment Profile (Optional)</label>
-        <select id="sc-env-profile"><option value="">— None —</option>${envOptions}</select>
-        <div class="hint">Select an environment profile to inject variables into execution & $SEH_ENV_FILE / .env.</div>
-      </div>
-      <div class="form-group">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <label for="sc-env" style="margin:0">Script-Specific Env Vars (JSON)</label>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="promptImportEnvToScriptJson()">📥 Import .env to JSON</button>
+      <!-- Right Column: Independent Editor Beside Popup -->
+      <div class="script-editor-pane" id="script-editor-pane">
+        <!-- Editor Header / Tab Bar -->
+        <div class="editor-header">
+          <div class="editor-tabs" id="editor-tabs-container"></div>
+          <div class="editor-actions">
+            <button type="button" id="btn-format-yaml" class="btn btn-ghost btn-sm btn-action-yaml" onclick="formatActiveEditorYaml()" title="Autoformat YAML (2 spaces indentation & syntax check)">
+              ⚡ <span>Format YAML</span>
+            </button>
+            <button type="button" id="btn-compose-template" class="btn btn-ghost btn-sm" onclick="insertSampleCompose()" title="Insert Docker Compose template">
+              📄 <span>Template</span>
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="copyActiveEditorContent(this)" title="Copy editor content to clipboard">
+              📋 <span>Copy</span>
+            </button>
+            <button type="button" id="btn-editor-expand" class="btn btn-ghost btn-sm btn-icon-only" onclick="toggleEditorMaximize()" title="Expand / Restore Editor">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l3.293 3.293a1 1 0 01-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 110-2h4a1 1 0 011 1v4a1 1 0 11-2 0V6.414l-3.293 3.293a1 1 0 11-1.414-1.414L13.586 5H12zm-9 9a1 1 0 012 0v1.586l3.293-3.293a1 1 0 011.414 1.414L6.414 15H8a1 1 0 110 2H4a1 1 0 01-1-1v-4zm13-1a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 110-2h1.586l-3.293-3.293a1 1 0 011.414-1.414L15 13.586V12a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+            </button>
+          </div>
         </div>
-        <input id="sc-env" type="text" placeholder='{"MY_VAR": "value"}' value="${escHtml(s?.env_vars || '{}')}" />
-        <div class="hint">Keys must be alphanumeric + underscore only. Overrides profile variables.</div>
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary">${s ? 'Save Changes' : 'Create Script'}</button>
+
+        <!-- Editor Workspace with Line Numbers & Enhanced Textarea -->
+        <div class="editor-workspace">
+          <div class="editor-gutter" id="editor-gutter">1</div>
+          <textarea id="sc-content" class="editor-code-textarea" spellcheck="false" placeholder="${isCompose ? 'services:\n  app:\n    image: nginx:alpine' : '#!/bin/bash\necho \'Hello from hook!\''}">${escHtml(modalMainContent)}</textarea>
+        </div>
+
+        <!-- Editor Footer / Status Bar -->
+        <div class="editor-footer">
+          <div class="editor-footer-left">
+            <span id="editor-pos-info">Ln 1, Col 1</span>
+            <span class="footer-dot">•</span>
+            <span id="editor-stat-info">0 lines</span>
+          </div>
+          <div class="editor-footer-right">
+            <span id="editor-lang-badge" class="badge badge-muted">YAML</span>
+            <span id="editor-yaml-status" class="yaml-status-ok hidden">✓ Valid YAML</span>
+          </div>
+        </div>
       </div>
     </form>
-  `);
+  `, 'modal-script-editor');
 
   renderModalFiles();
+  renderEditorTabs();
 
-  const contentEl = document.getElementById('sc-content');
-  if (contentEl) {
-    contentEl.addEventListener('input', (e) => {
-      const val = e.target.value.trim();
-      if ((val.startsWith('services:') || val.startsWith('version:')) && document.getElementById('sc-type').value !== 'docker_compose') {
-        setScriptType('docker_compose');
+  const textarea = document.getElementById('sc-content');
+  if (textarea) {
+    textarea.addEventListener('input', () => {
+      syncCurrentEditorToState();
+      updateEditorLineNumbers();
+      updateEditorStatus();
+
+      // Heuristic auto-detect docker compose when typing in main tab
+      if (modalActiveTab === 'main') {
+        const val = textarea.value.trim();
+        if ((val.startsWith('services:') || val.startsWith('version:')) && document.getElementById('sc-type')?.value !== 'docker_compose') {
+          setScriptType('docker_compose');
+        }
       }
     });
+
+    textarea.addEventListener('scroll', () => {
+      const gutter = document.getElementById('editor-gutter');
+      if (gutter) gutter.scrollTop = textarea.scrollTop;
+    });
+
+    textarea.addEventListener('keyup', updateEditorStatus);
+    textarea.addEventListener('click', updateEditorStatus);
+    textarea.addEventListener('select', updateEditorStatus);
+
+    textarea.addEventListener('keydown', (e) => {
+      // Tab / Shift+Tab handling
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const val = textarea.value;
+
+        if (start === end) {
+          if (!e.shiftKey) {
+            textarea.value = val.substring(0, start) + '  ' + val.substring(end);
+            textarea.selectionStart = textarea.selectionEnd = start + 2;
+          }
+        } else {
+          const startLine = val.lastIndexOf('\n', start - 1) + 1;
+          const endLine = val.indexOf('\n', end);
+          const blockEnd = endLine === -1 ? val.length : endLine;
+          const selectedText = val.substring(startLine, blockEnd);
+          const lines = selectedText.split('\n');
+
+          if (!e.shiftKey) {
+            const indented = lines.map(l => '  ' + l).join('\n');
+            textarea.value = val.substring(0, startLine) + indented + val.substring(blockEnd);
+            textarea.selectionStart = start + 2;
+            textarea.selectionEnd = end + (lines.length * 2);
+          } else {
+            let removedCount = 0;
+            const dedented = lines.map(l => {
+              if (l.startsWith('  ')) { removedCount += 2; return l.substring(2); }
+              if (l.startsWith(' ')) { removedCount += 1; return l.substring(1); }
+              return l;
+            }).join('\n');
+            textarea.value = val.substring(0, startLine) + dedented + val.substring(blockEnd);
+            textarea.selectionStart = Math.max(startLine, start - 2);
+            textarea.selectionEnd = Math.max(startLine, end - removedCount);
+          }
+        }
+        syncCurrentEditorToState();
+        updateEditorLineNumbers();
+        updateEditorStatus();
+        return;
+      }
+
+      // Enter auto-indent
+      if (e.key === 'Enter') {
+        const start = textarea.selectionStart;
+        const val = textarea.value;
+        const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+        const currentLine = val.substring(lineStart, start);
+        const leadingMatch = currentLine.match(/^[ ]+/);
+        const indent = leadingMatch ? leadingMatch[0] : '';
+
+        e.preventDefault();
+        const insertText = '\n' + indent;
+        textarea.value = val.substring(0, start) + insertText + val.substring(start);
+        textarea.selectionStart = textarea.selectionEnd = start + insertText.length;
+        syncCurrentEditorToState();
+        updateEditorLineNumbers();
+        updateEditorStatus();
+        return;
+      }
+
+      // Ctrl+S / Cmd+S save shortcut
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        const form = document.getElementById('script-form');
+        if (form) form.requestSubmit();
+      }
+    });
+
+    updateEditorLineNumbers();
+    updateEditorStatus();
   }
 
   document.getElementById('script-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    syncCurrentEditorToState();
+
     const envProfileVal = document.getElementById('sc-env-profile').value;
     let scriptType = document.getElementById('sc-type').value;
-    const contentVal = (document.getElementById('sc-content').value || '').trim();
+    const contentVal = (modalMainContent || '').trim();
     if (scriptType !== 'docker_compose' && (contentVal.startsWith('services:') || contentVal.startsWith('version:'))) {
       scriptType = 'docker_compose';
     }
@@ -634,10 +1114,10 @@ function openScriptModal(id) {
       name: document.getElementById('sc-name').value,
       description: document.getElementById('sc-desc').value,
       script_type: scriptType,
-      content: document.getElementById('sc-content').value,
+      content: modalMainContent,
       compose_cmd: document.getElementById('sc-compose-cmd')?.value || '',
       timeout_seconds: parseInt(document.getElementById('sc-timeout').value) || 30,
-      working_dir: document.getElementById('sc-workdir').value || '/tmp',
+      working_dir: document.getElementById('sc-workdir').value || (scriptType === 'docker_compose' ? '/var/www/my-app' : '/tmp'),
       env_vars: document.getElementById('sc-env').value || '{}',
       env_id: envProfileVal ? parseInt(envProfileVal) : null,
       files: modalScriptFiles,
@@ -645,7 +1125,8 @@ function openScriptModal(id) {
     try {
       if (s) await api.put(`/api/scripts/${s.id}`, payload);
       else await api.post('/api/scripts', payload);
-      closeModal(); toast(s ? 'Script updated' : 'Script created', 'success');
+      closeModal();
+      toast(s ? 'Script updated' : 'Script created', 'success');
       await loadScripts();
     } catch (err) { toast(err.message, 'error'); }
   });
@@ -1110,12 +1591,28 @@ async function loadSettings() {
 }
 
 // ─── Modal ───────────────────────────────────────────────────────────────────
-function openModal(title, body) {
+function openModal(title, body, modalClass = '') {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = body;
+  const modalEl = document.getElementById('modal');
+  modalEl.className = 'modal' + (modalClass ? ' ' + modalClass : '');
+  const headerActions = document.getElementById('modal-header-actions');
+  if (headerActions && !modalClass.includes('modal-script-editor')) {
+    headerActions.classList.add('hidden');
+    headerActions.innerHTML = '';
+  }
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
-function closeModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
+function closeModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+  const modalEl = document.getElementById('modal');
+  modalEl.className = 'modal';
+  const headerActions = document.getElementById('modal-header-actions');
+  if (headerActions) {
+    headerActions.classList.add('hidden');
+    headerActions.innerHTML = '';
+  }
+}
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-overlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
 

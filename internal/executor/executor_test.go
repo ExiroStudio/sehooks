@@ -224,3 +224,48 @@ func TestIsDockerCompose(t *testing.T) {
 		}
 	}
 }
+
+func TestRunScriptAdditionalFilesOverwrite(t *testing.T) {
+	dir, err := os.MkdirTemp("", "seh-test-overwrite-*")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Pre-create old files
+	oldNginxPath := filepath.Join(dir, "nginx.conf")
+	if err := os.WriteFile(oldNginxPath, []byte("OLD NGINX CONTENT"), 0644); err != nil {
+		t.Fatalf("write old file: %v", err)
+	}
+
+	opts := ScriptOptions{
+		ScriptType:     "bash",
+		Content:        "cat nginx.conf",
+		WorkingDir:     dir,
+		TimeoutSeconds: 5,
+		Files: []FileToDeploy{
+			{Path: "nginx.conf", Content: "NEW UPDATED NGINX CONTENT"},
+		},
+	}
+
+	res := RunScript(opts)
+	if res.Status != "success" {
+		t.Fatalf("expected success, got %s: %s", res.Status, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "NEW UPDATED NGINX CONTENT") {
+		t.Fatalf("expected stdout to contain updated file content, got: %q", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "OLD NGINX CONTENT") {
+		t.Fatalf("stdout still contains old file content: %q", res.Stdout)
+	}
+
+	// Verify file on disk is updated
+	data, err := os.ReadFile(oldNginxPath)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(data) != "NEW UPDATED NGINX CONTENT" {
+		t.Fatalf("expected file on disk to be updated, got %q", string(data))
+	}
+}
+

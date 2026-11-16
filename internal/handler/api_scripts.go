@@ -191,6 +191,7 @@ func createScript(w http.ResponseWriter, r *http.Request, database *db.DB) {
 	}
 
 	var dbFiles []db.ScriptFile
+	seenPaths := make(map[string]int)
 	for _, f := range req.Files {
 		cleanPath := strings.TrimSpace(f.Path)
 		if cleanPath == "" {
@@ -200,10 +201,15 @@ func createScript(w http.ResponseWriter, r *http.Request, database *db.DB) {
 			writeError(w, http.StatusBadRequest, "invalid file path: "+err.Error())
 			return
 		}
-		dbFiles = append(dbFiles, db.ScriptFile{
-			Path:    cleanPath,
-			Content: f.Content,
-		})
+		if idx, ok := seenPaths[cleanPath]; ok {
+			dbFiles[idx].Content = f.Content
+		} else {
+			seenPaths[cleanPath] = len(dbFiles)
+			dbFiles = append(dbFiles, db.ScriptFile{
+				Path:    cleanPath,
+				Content: f.Content,
+			})
+		}
 	}
 
 	s := &db.Script{
@@ -260,6 +266,7 @@ func updateScript(w http.ResponseWriter, r *http.Request, database *db.DB, id in
 
 	if req.Files != nil {
 		var dbFiles []db.ScriptFile
+		seenPaths := make(map[string]int)
 		for _, f := range req.Files {
 			cleanPath := strings.TrimSpace(f.Path)
 			if cleanPath == "" {
@@ -269,10 +276,15 @@ func updateScript(w http.ResponseWriter, r *http.Request, database *db.DB, id in
 				writeError(w, http.StatusBadRequest, "invalid file path: "+err.Error())
 				return
 			}
-			dbFiles = append(dbFiles, db.ScriptFile{
-				Path:    cleanPath,
-				Content: f.Content,
-			})
+			if idx, ok := seenPaths[cleanPath]; ok {
+				dbFiles[idx].Content = f.Content
+			} else {
+				seenPaths[cleanPath] = len(dbFiles)
+				dbFiles = append(dbFiles, db.ScriptFile{
+					Path:    cleanPath,
+					Content: f.Content,
+				})
+			}
 		}
 		existing.Files = dbFiles
 	}

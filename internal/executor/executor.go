@@ -77,8 +77,12 @@ func WriteAdditionalFiles(workingDir string, files []FileToDeploy) error {
 		if err != nil {
 			return err
 		}
-		if info, err := os.Stat(target); err == nil && info.IsDir() {
-			_ = os.RemoveAll(target)
+		if info, err := os.Stat(target); err == nil {
+			if info.IsDir() {
+				_ = os.RemoveAll(target)
+			} else {
+				_ = os.Remove(target)
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return fmt.Errorf("create dir for %s: %w", f.Path, err)
@@ -106,6 +110,13 @@ func WriteDotEnvFile(workingDir string, envVars map[string]string) error {
 		}
 	}
 	targetPath := filepath.Join(workingDir, ".env")
+	if info, err := os.Stat(targetPath); err == nil {
+		if info.IsDir() {
+			_ = os.RemoveAll(targetPath)
+		} else {
+			_ = os.Remove(targetPath)
+		}
+	}
 	return os.WriteFile(targetPath, buf.Bytes(), 0600)
 }
 
@@ -149,8 +160,12 @@ func RunScript(opts ScriptOptions) Result {
 			return Result{Status: "failed", Error: err, Stderr: err.Error(), ExitCode: -1}
 		}
 		composePath := filepath.Join(workDir, "docker-compose.yml")
-		if info, err := os.Stat(composePath); err == nil && info.IsDir() {
-			_ = os.RemoveAll(composePath)
+		if info, err := os.Stat(composePath); err == nil {
+			if info.IsDir() {
+				_ = os.RemoveAll(composePath)
+			} else {
+				_ = os.Remove(composePath)
+			}
 		}
 		if err := os.WriteFile(composePath, []byte(opts.Content), 0644); err != nil {
 			return Result{Status: "failed", Error: fmt.Errorf("write docker-compose.yml: %w", err), Stderr: err.Error(), ExitCode: -1}
@@ -247,7 +262,7 @@ seh_import_env() {
   local target="${1:-.env}"
   if [ -n "${SEH_ENV_FILE:-}" ] && [ -f "${SEH_ENV_FILE}" ]; then
     mkdir -p "$(dirname "$target")" 2>/dev/null || true
-    cp "${SEH_ENV_FILE}" "$target"
+    cp -f "${SEH_ENV_FILE}" "$target"
     chmod 600 "$target" 2>/dev/null || true
     echo "[sehooks] Environment imported to $target"
   else
